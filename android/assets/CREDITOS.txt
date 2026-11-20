@@ -1,0 +1,54 @@
+FOTOGRAFIAS
+jesus.jpg — Fernando Yáñez de la Almedina, Head of Christ, ca. 1506, The Metropolitan Museum of Art, domínio público. Recorte e tratamento monocromático.
+https://www.metmuseum.org/art/collection/search/641257
+
+cloud.jpg — Rosendahl, Clouds in blue sky, domínio público.
+https://commons.wikimedia.org/wiki/File:Clouds_in_blue_sky.jpg
+
+sun.jpg — ElooKoN, Blue sky and clouds, CC BY-SA 4.0.
+https://commons.wikimedia.org/wiki/File:Blue_sky_and_clouds.jpg
+https://creativecommons.org/licenses/by-sa/4.0/
+
+night.jpg — Kabita Darlami, A full moon is seen in the dark sky, Unsplash License.
+https://unsplash.com/photos/a-full-moon-is-seen-in-the-dark-sky-tzyo26h8C_E
+
+rain.jpg — Emmanuel Phaeton, Raindrops on a window with a black background, Unsplash License.
+https://unsplash.com/fr/photos/gouttes-de-pluie-sur-une-fenetre-avec-un-fond-noir-ajeFGwm3hMk
+
+verse.jpg — Benjamin Chambon, Sunrise over misty mountains with warm orange sky, Unsplash License.
+https://unsplash.com/photos/sunrise-over-misty-mountains-with-warm-orange-sky-hwLI8K9zcq0
+
+As fotografias são redimensionadas ou recortadas para apresentação, com uma camada de contraste na interface.
+https://unsplash.com/license
+
+ÍCONES, TEXTO E TIPOGRAFIA
+Spotify — https://newsroom.spotify.com/media-kit/stream-on-logos/
+YouTube — símbolo de https://simpleicons.org/ renderizado nas cores da marca.
+Steam — favicon oficial em https://store.steampowered.com/favicon.ico
+Codex — ícone incluído no aplicativo Windows da OpenAI.
+Cursor — ícone da Anysphere em https://cursor.com/marketing-static/favicon.svg
+Miro — símbolo de https://simpleicons.org/ composto no cartão amarelo.
+Lucide — https://lucide.dev/license (licença incluída em icons/)
+Ícones meteorológicos — https://openweathermap.org/api/weather-conditions
+Condições meteorológicas — https://open-meteo.com/
+Arte e versículo do dia — https://biblia.com/plugins/VerseOfTheDay
+Fonte Manrope — https://fonts.google.com/specimen/Manrope (OFL incluída em fonts/)
+GIFS DE MONITORAMENTO
+FalleN — FPS.
+https://tenor.com/view/meu-deus-fallen-fallen-gabriel-toledo-fallen-meu-deus-gif-7399399703257583229
+Saul Goodman — processos.
+https://tenor.com/view/jimmy-mcgill-saul-goodman-gene-takavic-better-call-saul-breaking-bad-gif-27702921
+Elon Musk — RAM.
+https://tenor.com/view/elon-musk-elon-thinking-long-thinking-loop-think-musk-gif-7263305392554161956
+This Is Fine — temperatura.
+https://tenor.com/view/this-is-fine-gif-13064800488185898936
+Michael Scott — CPU normal e em atenção, respectivamente.
+https://tenor.com/view/michael-scott-nod-the-office-office-ditto-gif-11888913
+https://tenor.com/view/the-office-michael-scott-michael-scott-no-gif-7842199
+PC em chamas — GPU.
+https://tenor.com/view/pc-fire-gif-18709628
+Jim Halpert — tráfego normal e em atenção, respectivamente.
+https://tenor.com/view/the-office-jim-halpert-smile-gif-12780594
+https://tenor.com/view/jim-jim-halpert-the-office-john-krasinski-jim-the-office-gif-26453693
+Stanley Hudson — armazenamento crítico.
+https://tenor.com/view/the-office-stanley-hudson-leslie-david-baker-eye-roll-rolling-eyes-gif-14525409

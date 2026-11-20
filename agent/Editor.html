@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RianDeckOS Studio</title>
+<style>
+:root{color-scheme:dark;--page:#0d0d10;--card:#1b1b20;--red:#e32636;--muted:#a9a9b5}
+*{box-sizing:border-box}body{margin:0;background:var(--page);font:15px system-ui;color:#f5f5f5}
+header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px}
+h1,h2{margin:0 0 12px}h1 span{color:var(--red)}p{color:var(--muted)}main{padding-top:0}
+section{background:var(--card);padding:18px;border:1px solid #38383e;border-radius:15px;margin-bottom:16px}
+button,input,select{font:inherit;border-radius:8px;background:#121216;color:#f5f5f5;border:1px solid #51515a;padding:8px}
+button{cursor:pointer}button:hover,button:focus-visible{border-color:var(--red)}.primary{background:#af1d2a;border-color:#e32636}
+.toolbar,.fields,.step{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
+.card{display:grid;gap:8px;padding:12px;border:1px solid #4b3a3f;border-radius:10px;background:#17171b}
+label{display:grid;gap:4px}label:has(input[type=checkbox]){display:flex}.card.drag{opacity:.45}
+input,select{min-width:0}.handle{cursor:grab;color:#d3b9bd}#message{min-height:22px}.error{color:#ff8793}
+.step{margin:8px 0}.step input{width:125px}details summary{cursor:pointer;margin:8px 0}.macro{margin:10px 0;border-top:1px solid #42424a;padding-top:8px}
+</style></head>
+<body>
+<header><h1>RianDeck<span>OS</span> Studio</h1><div class="toolbar">
+<button id="import">Importar</button><button id="export">Exportar</button><button class="primary" id="save">Salvar e sincronizar</button>
+<input id="file" type="file" accept="application/json,.json" hidden>
+</div></header>
+<main><p id="message" role="status"></p>
+<section><h2>Deck</h2><div id="profiles" class="fields"></div><div id="pages" class="fields"></div><div id="buttons" class="grid"></div>
+<div class="toolbar" id="create"></div></section>
+<section><h2>Macros</h2><div id="macros"></div><button id="add-macro">Criar macro</button></section>
+</main>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const fragment = location.hash.slice(1);
+if (/^[a-fA-F0-9]{64}$/.test(fragment)) {
+ sessionStorage.setItem("rd-editor-key", fragment);
+ history.replaceState(null, "", location.pathname);
+}
+const key = sessionStorage.getItem("rd-editor-key");
+const actionsPt = {"youtube":"YouTube","codex":"Codex","cursor":"Cursor","miro":"Miro","microphone":"Alternar microfone",
+"media":"Play / Pause","steam":"Steam","workspace":"Área de trabalho","lock":"Bloquear Windows","terminal":"PowerShell",
+"explorer":"Arquivos","previous":"Faixa anterior","next":"Próxima faixa","mute":"Silenciar saída","volume-up":"Aumentar volume",
+"volume-down":"Diminuir volume","browser":"Navegador","screenshot":"Captura de tela","meeting":"Teams",
+"hotkey-copy":"Ctrl+C","hotkey-paste":"Ctrl+V","hotkey-save":"Ctrl+S","spotify":"Spotify"};
+let config, catalog, profileIndex = 0, pageIndex = 0, dragging = null;
+const id = () => crypto.randomUUID().slice(0, 12);
+function element(tag, text) {
+ const node = document.createElement(tag);
+ if (text !== undefined) node.textContent = text;
+ return node;
+}
+function wrap(label,node) { const result=element("label",label); result.append(node); return result; }
+function button(text, click) {
+ const control=element("button",text); control.type="button"; control.onclick=click; return control;
+}
+function entry(value, update, maxlength=28) {
+ const input=element("input"); input.value=value; input.maxLength=maxlength;
+ input.oninput=()=>update(input.value); return input;
+}
+function checkbox(value, update) {
+ const input=element("input"); input.type="checkbox"; input.checked=value; input.onchange=()=>update(input.checked); return input;
+}
+function select(options, value, update) {
+ const input=element("select");
+ for (const [v,label] of options) { const option=element("option",label); option.value=v; input.append(option); }
+ input.value=value; input.onchange=()=>update(input.value); return input;
+}
+function message(text,error=false) {
+ byId("message").textContent=text; byId("message").classList.toggle("error",error);
+}
+function actionOptions(includeMacros=false, includeScripts=false) {
+ return Object.keys(actionsPt).filter(action=>catalog.actions.includes(action)).map(action=>[action,actionsPt[action]])
+   .concat(includeMacros ? config.macros.map(m=>["macro:"+m.id,"Macro · "+m.name]) : [])
+   .concat(includeScripts ? catalog.scripts.map(s=>["script:"+s,"Script autorizado · "+s]) : []);
+}
+async function api(route, options={}) {
+ const response=await fetch("/studio/"+route,{...options,headers:{Authorization:"Bearer "+key,"Content-Type":"application/json"}});
+ if (!response.ok) {
+   const problem=await response.json().catch(()=>null);
+   throw Error(problem?.error || (response.status===401 ? "Abra o Studio pelo atalho do Windows." : "Falha ao acessar o agente."));
+ }
+ return response.status===204 ? null : response.json();
+}
+function redraw() {
+ profileIndex=Math.min(profileIndex,config.profiles.length-1);
+ const profile=config.profiles[profileIndex];
+ pageIndex=Math.min(pageIndex,profile.pages.length-1);
+ const page=profile.pages[pageIndex];
+ byId("profiles").replaceChildren(
+   wrap("Perfil",select(config.profiles.map((p,i)=>[String(i),p.name]),String(profileIndex), value=>{profileIndex=Number(value);pageIndex=0;redraw();})),
+   wrap("Nome",entry(profile.name,value=>profile.name=value)),
+   wrap("Processos para troca automática",entry(profile.processes.join(", "),value=>profile.processes=value.split(",").map(v=>v.trim()).filter(Boolean),340)),
+   wrap("Automático",checkbox(config.auto,value=>config.auto=value)),
+   button("Ativar perfil",()=>{config.selected=profile.id;message("Perfil selecionado. Salve para enviar ao aparelho.");}),
+   button("Novo perfil",()=>{if(config.profiles.length>=8)return;config.profiles.push({id:id(),name:"Novo perfil",processes:[],pages:[{id:id(),name:"Principal",buttons:[]}]});profileIndex=config.profiles.length-1;pageIndex=0;redraw();})
+ );
+ byId("pages").replaceChildren(
+   wrap("Página",select(profile.pages.map((p,i)=>[String(i),p.name]),String(pageIndex),value=>{pageIndex=Number(value);redraw();})),
+   wrap("Nome da página",entry(page.name,value=>page.name=value)),
+   button("Criar página",()=>{if(profile.pages.length>=16)return;profile.pages.push({id:id(),name:"Nova página",buttons:[]});pageIndex=profile.pages.length-1;redraw();}),
+   button("Excluir página",()=>{
+     if(profile.pages.length<2)return;
+     if(profile.pages.some(p=>p.buttons.some(b=>b.folder===page.id))){message("Remova os botões que apontam para esta pasta.",true);return;}
+     profile.pages.splice(pageIndex,1);redraw();
+   })
+ );
+ const grid=byId("buttons");grid.replaceChildren();
+ page.buttons.forEach((item,index)=>{
+   const card=element("article");card.className="card";card.draggable=true;
+   card.ondragstart=event=>{dragging=index;event.dataTransfer.setData("text/plain",String(index));card.classList.add("drag");};
+   card.ondragend=()=>{dragging=null;card.classList.remove("drag");};
+   card.ondragover=event=>{if(dragging!==null)event.preventDefault();};
+   card.ondrop=event=>{event.preventDefault();if(dragging===null||dragging===index)return;
+     page.buttons.splice(index,0,page.buttons.splice(dragging,1)[0]);dragging=null;redraw();};
+   const tools=element("div");tools.className="toolbar";
+   tools.append(button("↑",()=>move(index,-1)),button("↓",()=>move(index,1)),button("Duplicar",()=>{
+      if(page.buttons.length>=9)return;page.buttons.splice(index+1,0,{...item});redraw();}),
+      button("Remover",()=>{page.buttons.splice(index,1);redraw();}));
+   const handle=element("strong",String(index+1).padStart(2,"0")+"   Arrastar");handle.className="handle";
+   card.append(handle,wrap("Título",entry(item.label,v=>item.label=v)),
+     wrap("Ícone",select(catalog.icons.map(v=>[v,v]),item.icon,v=>item.icon=v)),
+     wrap("Cor",select([["graphite","Grafite"],["red","Vermelho"],["blue","Azul"],["green","Verde"],["amber","Âmbar"]],item.color,v=>item.color=v)),tools);
+   const targets=actionOptions(true).concat(profile.pages.filter(p=>p.id!==page.id).map(p=>["folder:"+p.id,"Pasta · "+p.name]));
+   card.insertBefore(wrap("Ação",select(targets,item.folder ? "folder:"+item.folder : item.action,v=>{
+      item.folder=v.startsWith("folder:") ? v.slice(7) : null;item.action=item.folder ? "" : v;
+   })),tools);
+   grid.append(card);
+ });
+ function move(from,direction) { const to=from+direction; if(to<0||to>=page.buttons.length)return;
+   page.buttons.splice(to,0,page.buttons.splice(from,1)[0]);redraw(); }
+ byId("create").replaceChildren(button("Criar botão",()=>{
+   if(page.buttons.length===9){message("Esta página já possui nove botões.",true);return;}
+   page.buttons.push({label:"Novo botão",icon:"grid",color:"graphite",action:"explorer"});redraw();
+ }),button("Criar pasta",()=>{
+   if(page.buttons.length===9||profile.pages.length===16){message("Limite de botões ou páginas atingido.",true);return;}
+   const folder=id();profile.pages.push({id:folder,name:"Nova pasta",buttons:[]});
+   page.buttons.push({label:"Nova pasta",icon:"folder",color:"graphite",action:"",folder});redraw();
+ }));
+ drawMacros();
+}
+function drawMacros() {
+ const target=byId("macros");target.replaceChildren();
+ for (const macro of config.macros) {
+   const detail=element("details");detail.className="macro";detail.open=true;
+   detail.append(element("summary",macro.name),wrap("Nome",entry(macro.name,v=>macro.name=v,40)),
+     wrap("Pedir confirmação",checkbox(macro.confirm,v=>macro.confirm=v)));
+   macro.steps.forEach((step,index)=>{
+     const row=element("div");row.className="step";
+     const delay=entry(String(step.delayMs),value=>step.delayMs=Number(value),5);delay.type="number";delay.min="0";delay.max="10000";
+     row.append(wrap("Etapa "+(index+1),select(actionOptions(false,true),step.action,v=>step.action=v)),
+       wrap("Atraso antes · ms",delay),button("Remover etapa",()=>{macro.steps.splice(index,1);drawMacros();}));
+     detail.append(row);
+   });
+   detail.append(button("Adicionar etapa",()=>{if(macro.steps.length<16)macro.steps.push({action:"explorer",delayMs:0}); drawMacros();}),
+     button("Excluir macro",()=>{
+       if(config.profiles.some(p=>p.pages.some(g=>g.buttons.some(b=>b.action==="macro:"+macro.id)))){
+        message("Remova do Deck os botões que usam esta macro.",true);return;
+       }
+       config.macros=config.macros.filter(item=>item!==macro);drawMacros();
+     }));
+   target.append(detail);
+ }
+}
+byId("save").onclick=async()=>{if(!config)return;try {await api("config",{method:"PUT",body:JSON.stringify(config)});message("Salvo. O celular recebe a atualização em até alguns segundos.");redraw();}
+ catch(error){message(error.message,true);}};
+byId("add-macro").onclick=()=>{if(!config||config.macros.length===24)return;config.macros.push({id:id(),name:"Nova macro",steps:[{action:"explorer",delayMs:0}],confirm:false});drawMacros();};
+byId("export").onclick=()=>{if(!config)return;const url=URL.createObjectURL(new Blob([JSON.stringify(config,null,2)],{type:"application/json"}));
+ const file=element("a");file.href=url;file.download="riandeck-config.json";file.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+byId("import").onclick=()=>byId("file").click();
+byId("file").onchange=async event=>{
+ const file=event.target.files[0];if(!file)return;
+ try{
+   if(file.size>262144)throw Error("Arquivo maior que 256 KB.");
+   const replacement=JSON.parse(await file.text());
+   if(!confirm("Substituir a configuração atual do Deck pela importada?"))return;
+   await api("config",{method:"PUT",body:JSON.stringify(replacement)});
+   config=await api("config");profileIndex=pageIndex=0;redraw();message("Configuração importada e sincronizada.");
+ }catch(error){message(error.message,true);}finally{event.target.value="";}
+};
+Promise.all([api("config"),api("catalog")]).then(([state,items])=>{config=state;catalog=items;redraw();})
+ .catch(error=>message(error.message,true));
+</script></body></html>

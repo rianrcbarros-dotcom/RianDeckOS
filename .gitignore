@@ -1,0 +1,14 @@
+.toolchain/
+out/
+bin/
+obj/
+__pycache__/
+*.py[cod]
+*.apk
+*.jks
+*.keystore
+pairing.key
+editor.key
+appsettings.Local.json
+.env
+.env.*
