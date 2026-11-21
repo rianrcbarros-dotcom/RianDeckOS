@@ -12,3 +12,4 @@ editor.key
 appsettings.Local.json
 .env
 .env.*
+/agent/appsettings.json

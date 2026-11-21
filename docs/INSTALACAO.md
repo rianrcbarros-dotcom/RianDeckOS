@@ -63,3 +63,7 @@ Start-Process "$voz\ollama\ollama.exe" -ArgumentList serve -WindowStyle Hidden
 Reinicie o agente depois de gravar `appsettings.json`. A internet é necessária para obter os componentes. O processamento de voz funciona localmente depois dos downloads. Em **Assistente**, conceda permissão e use dois toques por pergunta.
 
 Fontes: [Ollama](https://github.com/ollama/ollama/releases), [Qwen3](https://ollama.com/library/qwen3:1.7b), [Whisper.cpp](https://github.com/ggml-org/whisper.cpp/releases), [modelos Whisper](https://huggingface.co/ggerganov/whisper.cpp), [Piper](https://github.com/OHF-Voice/piper1-gpl), [vozes Piper](https://huggingface.co/rhasspy/piper-voices).
+
+## Configurações pessoais e institucionais
+
+No appsettings.json local do agente, use deck-voice-name e deck-voice-pronunciation para personalizar a saudação. Use deck-serpro-url para configurar o endereço HTTPS autorizado por sua instituição. Guarde esses valores somente na instalação local. Não versione esse arquivo.

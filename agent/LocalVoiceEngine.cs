@@ -7,7 +7,7 @@ using System.Text.Json;
 internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory clients) : IDisposable
 {
     private Process? ownedOllama;
-    private string Root => config["deck-local-voice-root"] ?? @"D:\Baixados\RianDeckVoice";
+    private string Root => config["deck-local-voice-root"] ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RianDeckVoice");
     private string Whisper => Path.Combine(Root, "whisper", "whisper-cli.exe");
     private string WhisperModel => Path.Combine(Root, "models", "ggml-base.bin");
     private string PreciseWhisperModel => Path.Combine(Root, "models", "ggml-small-q5_1.bin");
@@ -21,6 +21,9 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
         }
     }
     private string Voices => Path.Combine(Root, "voices");
+    private string VoiceName => config["deck-voice-name"]?.Trim() ?? "";
+    internal string Personalize(string text) => text.Replace("{nome}", VoiceName.Length is > 0 and <= 40 ? ", " + VoiceName : "",
+        StringComparison.Ordinal);
     private string Model => config["deck-ollama-model"] ?? "qwen3:1.7b";
 
     internal string? Missing()
@@ -85,16 +88,6 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
         finally { ownedOllama.Dispose(); }
     }
 
-    internal async Task WarmModel(CancellationToken token)
-    {
-        try
-        {
-            using var response = await clients.CreateClient("ollama").PostAsJsonAsync("api/generate",
-                new { model = Model, keep_alive = "3m", options = new { num_ctx = 2048 } }, token);
-        }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException) { }
-    }
-
     internal async Task<string> Transcribe(byte[] pcm, CancellationToken token)
     {
         string scratch = Path.Combine(Root, "scratch");
@@ -109,16 +102,22 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
                 file.Write(16); file.Write((short)1); file.Write((short)1); file.Write(16000); file.Write(32000);
                 file.Write((short)2); file.Write((short)16); file.Write("data"u8); file.Write(audio.Length); file.Write(audio);
             }
-            async Task<string> Decode(string model, bool scores)
+            async Task<string> Decode(string model, bool scores, int context = 0)
             {
                 string[] args = ["-m", model, "-f", wav, "-l", "pt", "-t", "4", "-nt", "-np",
                     "-bo", "1", "-bs", "2", "-nf", "-nth", "0.5"];
                 if (scores) args = [..args, "-ojf", "-of", wav];
+                if (context > 0) args = [..args, "-ac", context.ToString(CultureInfo.InvariantCulture)];
                 var text = await Run(Whisper, args, null, token);
                 return Encoding.UTF8.GetString(text).Trim();
             }
 
-            string result = await Decode(WhisperModel, File.Exists(PreciseWhisperModel));
+            bool preciseAvailable = File.Exists(PreciseWhisperModel);
+            // A short utterance fits in a smaller encoder window. Run the more precise model once.
+            if (audio.Length <= 96000 && preciseAvailable)
+                return await Decode(PreciseWhisperModel, false, 512);
+
+            string result = await Decode(WhisperModel, preciseAvailable);
             if (!string.IsNullOrWhiteSpace(result) && File.Exists(wav + ".json"))
             {
                 using var json = JsonDocument.Parse(await File.ReadAllBytesAsync(wav + ".json", token));
@@ -130,7 +129,11 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
                                 if (word.TryGetProperty("id", out var id) && id.GetInt32() < 50257 &&
                                     word.TryGetProperty("p", out var confidence))
                                     probabilities.Add(confidence.GetDouble());
-                if (probabilities.Count != 0 && probabilities.Average() < .58 && VoiceIntent.App(result) is null)
+                // A complete command for an allowlisted app can skip the heavier pass when
+                // confidence is reasonable. Unclear audio and general questions still get reviewed.
+                bool shortcut = VoiceIntent.App(result) is not null;
+                double threshold = shortcut ? .59 : audio.Length < 80000 ? .80 : .64;
+                if (probabilities.Count != 0 && probabilities.Average() < threshold)
                     result = await Decode(PreciseWhisperModel, false);
             }
             return result;
@@ -150,7 +153,7 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
             using var response = await clients.CreateClient("ollama").PostAsJsonAsync("api/chat", new
             {
                 model = Model, stream = false, think = false, keep_alive = "3m",
-                messages = new[] { (object)new { role = "system", content = "Converse em português brasileiro, de forma bem informal, breve e natural. Chame o usuário de Rian quando fizer sentido. Responda com uma frase curta, em linguagem falada e sem markdown. Dê a resposta direta antes de detalhes. Use fatos verificáveis. Se o texto da fala estiver confuso, peça para Rian repetir. Não invente ações, arquivos nem compromissos." } }.Concat(history.TakeLast(9)),
+                messages = new[] { (object)new { role = "system", content = "Converse em português brasileiro, de forma bem informal, breve e natural. Responda com uma frase curta, em linguagem falada e sem markdown. Dê a resposta direta antes de detalhes. Use fatos verificáveis. Se o texto da fala estiver confuso, peça para a pessoa repetir. Não invente ações, arquivos nem compromissos." } }.Concat(history.TakeLast(9)),
                 options = new { num_ctx = 2048, num_predict = 42, temperature = .35 }
             }, token);
             response.EnsureSuccessStatusCode();
@@ -172,7 +175,16 @@ internal sealed class LocalVoiceEngine(IConfiguration config, IHttpClientFactory
             ?? voice.FirstOrDefault() ?? throw new IOException("Voz indisponível.");
         using var settings = JsonDocument.Parse(await File.ReadAllTextAsync(model + ".json", token));
         int rate = settings.RootElement.GetProperty("audio").GetProperty("sample_rate").GetInt32();
-        string speech = VoiceIntent.Spoken(text);
+        string speech = VoiceIntent.Spoken(Personalize(text));
+        speech = System.Text.RegularExpressions.Regex.Replace(speech, @"\b(\d{1,2}):(\d{2})\b",
+            match => match.Groups[1].Value + " horas" +
+                (match.Groups[2].Value == "00" ? "" : " e " + match.Groups[2].Value));
+        speech = System.Text.RegularExpressions.Regex.Replace(speech.Replace("…", "."),
+            @"[\t\r\n]+", " ").Trim();
+        if (VoiceName.Length is > 0 and <= 40 && config["deck-voice-pronunciation"] is { Length: > 0 and <= 60 } pronunciation)
+            speech = System.Text.RegularExpressions.Regex.Replace(speech,
+                $@"\b{System.Text.RegularExpressions.Regex.Escape(VoiceName)}\b", _ => pronunciation,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         var raw = await Run(PiperExecutable, ["-s", "-m", "piper", "-m", model, "--output-raw",
             "--length-scale", (1 / speed).ToString("0.00", CultureInfo.InvariantCulture),
             "--sentence-silence", pause.ToString("0.00", CultureInfo.InvariantCulture)], speech, token, PiperRuntime);

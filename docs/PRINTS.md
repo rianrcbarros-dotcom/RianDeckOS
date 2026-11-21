@@ -1,6 +1,6 @@
 # Prints do RianDeckOS
 
-Capturas do APK em paisagem no Moto G20. As leituras de monitoramento representam o instante da captura.
+Capturas do APK em paisagem no Moto G20. As leituras de monitoramento representam o instante da captura. Cidade, saudação personalizada e registro local de automação foram ocultados.
 
 ## Controle
 

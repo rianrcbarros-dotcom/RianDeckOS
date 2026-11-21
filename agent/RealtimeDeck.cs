@@ -2,13 +2,13 @@ using System.Buffers.Binary;
 using System.Net.WebSockets;
 using System.Text.Json;
 
-internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant assistant, MediaSession media)
+internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant assistant, MediaSession media, AssistedExecutionEngine operation)
 {
     private readonly SemaphoreSlim sessions = new(1, 1);
     private const int Rate = 24000;
     private static readonly Dictionary<string, string> Commands = new()
     {
-        ["status do pc"] = "Status do PC", ["como esta o computador"] = "Status do PC",
+        ["status do pc"] = "Status do PC", ["status do computador"] = "Status do PC", ["como esta o computador"] = "Status do PC", ["como esta meu computador"] = "Status do PC",
         ["abra codex"] = "Abra Codex", ["abra o codex"] = "Abra Codex",
         ["abra cursor"] = "Abra Cursor", ["abra o cursor"] = "Abra Cursor",
         ["analise os erros do projeto"] = "Analise os erros do projeto",
@@ -18,6 +18,18 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
 
     private static string Get(JsonElement json, string name) =>
         json.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+    private static int AudioLevel(byte[] pcm, int offset, int count, double gain = 1)
+    {
+        if (count < 2) return 0;
+        long energy = 0;
+        for (int index = offset; index + 1 < offset + count; index += 2)
+        {
+            int value = BinaryPrimitives.ReadInt16LittleEndian(pcm.AsSpan(index,2));
+            energy += (long)value * value;
+        }
+        return (int)Math.Clamp(Math.Sqrt(energy / (count / 2d)) * gain / 30d, 0, 100);
+    }
 
     private static async Task<(byte[] Data, WebSocketMessageType Type)> Read(WebSocket socket, CancellationToken token)
     {
@@ -78,12 +90,22 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
 
         async Task Say(string text, CancellationToken stop)
         {
-            byte[] pcm = await engine.Speak(text, voice, speed, pause, stop);
+            text = engine.Personalize(text);
             await Event(new { type = "caption", text }, stop);
+            byte[] pcm = await engine.Speak(text, voice, speed, pause, stop);
             await Event(new { type = "audio", item = "local_" + Guid.NewGuid().ToString("N"), index = 0 }, stop);
             if (!phoneSpeaker)
             {
-                await WindowsVoiceOutput.Play(pcm, volume, stop);
+                var playback = WindowsVoiceOutput.Play(pcm, volume, stop);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!playback.IsCompleted)
+                {
+                    int offset = (int)Math.Min(pcm.Length, clock.ElapsedMilliseconds * 48) & ~1;
+                    int count = Math.Min(3840, pcm.Length - offset);
+                    await Event(new { type = "level", value = AudioLevel(pcm, offset, count, volume) }, stop);
+                    await Task.WhenAny(playback, Task.Delay(80, stop));
+                }
+                await playback;
                 await Event(new { type = "done" }, stop);
                 return;
             }
@@ -136,8 +158,12 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
             var key = string.Concat(text.ToLowerInvariant().Normalize(System.Text.NormalizationForm.FormD)
                 .Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark))
                 .Trim().TrimEnd('.', '?', '!');
+            bool google = GoogleRead.Matches(text);
+            bool direct = VoiceIntent.IsDirect(text);
+            string? assisted = google || direct && VoiceIntent.App(text) != "cursor" ? null : operation.Request(text);
             string reply;
-            if (Commands.TryGetValue(key, out var command) || VoiceIntent.App(text) != null || VoiceIntent.LooksLikeOpening(text))
+            if (assisted != null) reply = assisted;
+            else if (Commands.TryGetValue(key, out var command) || google || direct || VoiceIntent.LooksLikeOpening(text))
             {
                 command ??= text;
                 var result = await assistant.Answer(new(command), stop);
@@ -148,10 +174,16 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
                     await Event(new { type = "confirm", id, text = result.Text }, stop);
                     return;
                 }
+                if (direct && !google)
+                {
+                    await Event(new { type = "action_result", text = engine.Personalize(result.Text) }, stop);
+                    await Event(new { type = "done" }, stop);
+                    return;
+                }
                 reply = result.Text;
             }
             else reply = await engine.Answer(history, text, stop);
-            await Say(string.IsNullOrWhiteSpace(reply) ? "Pode falar de novo, Rian?" : reply, stop);
+            await Say(string.IsNullOrWhiteSpace(reply) ? "Pode falar de novo{nome}?" : reply, stop);
         }
 
         async Task Feed(byte[] data)
@@ -193,9 +225,17 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
         {
             try
             {
+                long lastLevel = 0;
                 await WindowsVoiceInput.Capture(
                     () => Event(new { type = "source", text = "● Microfone padrão do Windows" }, capture),
-                    Feed, capture);
+                    async pcm =>
+                    {
+                        await Feed(pcm);
+                        long now = Environment.TickCount64;
+                        if (now - lastLevel < 80) return;
+                        lastLevel = now;
+                        await Event(new { type = "level", value = AudioLevel(pcm, 0, pcm.Length) }, capture);
+                    }, capture);
             }
             catch (IOException)
             {
@@ -219,7 +259,7 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
                 return;
             }
             voice = Get(prefs, "voice");
-            if (voice.Length == 0) voice = "pt_BR-edresson-low";
+            if (voice.Length == 0) voice = "pt_BR-faber-medium";
             phoneSpeaker = prefs.TryGetProperty("phoneSpeaker", out var output) && output.ValueKind == JsonValueKind.True;
             if (prefs.TryGetProperty("volume", out var loudness) && loudness.TryGetDouble(out var level))
                 volume = Math.Clamp(level, 0, 1);
@@ -234,7 +274,6 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
                 var playing = JsonSerializer.SerializeToElement(await media.Read());
                 if (playing.TryGetProperty("playing", out var active) && active.ValueKind == JsonValueKind.True) greeting = "";
             }
-            _ = engine.WarmModel(token);
             await Event(new { type = "ready", greeting = greeting.Length > 0, phoneSpeaker }, token);
             if (greeting.Length > 0) StartTurn(stop => Say(greeting, stop));
             while (!token.IsCancellationRequested)
@@ -264,6 +303,18 @@ internal sealed class LocalVoiceSession(LocalVoiceEngine engine, DeckAssistant a
                             windowsCancel = CancellationTokenSource.CreateLinkedTokenSource(token);
                             windows = CaptureWindows(windowsCancel.Token);
                         }
+                        break;
+                    case "stop_turn":
+                        windowsCancel?.Cancel();
+                        if (windows != null) await windows;
+                        windowsCancel?.Dispose();
+                        windowsCancel = null;
+                        windows = null;
+                        recording = false;
+                        input.SetLength(0);
+                        lock (pendingGate) pending = null;
+                        if (turn is { IsCompleted: false }) { turnCancel?.Cancel(); await turn; }
+                        await Event(new { type = "done" }, token);
                         break;
                     case "submit_capture":
                         if (!recording) break;

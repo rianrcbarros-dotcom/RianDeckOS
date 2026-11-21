@@ -36,3 +36,15 @@
 - Validar um segundo ambiente limpo, registrar versões das ferramentas e separar uma configuração de assinatura para distribuição.
 - Se houver uma fonte autorizada de FPS, integrar sua métrica real. Preservar o estado sem medição quando a fonte ficar indisponível.
 - Revisar procedência e licenças dos GIFs, marcas, fotos e modelos antes de distribuição fora do ambiente privado. Consulte os [créditos](../android/assets/CREDITOS.txt).
+
+## Repouso e retorno
+
+Após cinco segundos sem o agente, o app reduz o brilho e libera a trava de tela ligada. O Android apaga a tela de acordo com o tempo de inatividade do aparelho. Depois do login no Windows, o agente com inicialização ativada restaura o túnel USB, envia um comando de despertar e reabre o painel. O bloqueio seguro do Android continua sujeito à autenticação do aparelho.
+
+Controle consulta status, perfil e mídia. Monitoramento consulta apenas status. Assistente e Configurações usam uma checagem leve, e Automações também consulta o perfil. Ao trocar de aba, o app reconsulta imediatamente o necessário.
+
+Em **Configurações → Sistema**, a economia de bateria fica ativa por padrão. O brilho do Deck fica limitado a 42% com alimentação USB e 32% na bateria. Na bateria, após 45 segundos sem toque, o app reduz o brilho e permite que o Android apague a tela conforme o tempo de inatividade configurado. O painel Controle consulta as métricas a cada quatro segundos e os botões enviam comandos ao toque.
+
+## Imagens da tela Controle
+
+O clima usa a condição e o indicador de dia ou noite da leitura meteorológica. À noite, quando não há chuva, o cartão mostra a lua e estrelas decorativas. Durante o dia, mostra o céu correspondente à condição, com o ícone de sol em tempo limpo. As fotografias do clima e do versículo aparecem sem escurecimento. Uma sombra sob as letras ajuda na leitura.

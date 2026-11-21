@@ -29,8 +29,10 @@ final class VoiceDeck {
     private final DeckActivity activity;
     private final SharedPreferences settings;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private TextView phase, caption, heard, connection, action;
+    private TextView phase, action, transcript, replyCaption;
+    private AssistantPersona persona;
     private VoiceOrb waveform;
+    private JSONObject currentJob;
     private Session session;
     private boolean visible, connected, greeted, attempted, requesting;
     private boolean testing;
@@ -42,84 +44,204 @@ final class VoiceDeck {
 
     void mount(LinearLayout body, boolean online) {
         visible = true;
-        LinearLayout center = activity.column();
-        center.setGravity(Gravity.CENTER_HORIZONTAL);
-        center.setPadding(0, activity.dp(24), 0, 0);
-        body.addView(center, new LinearLayout.LayoutParams(-1, -2));
-        connection = activity.text("", 12, DeckTheme.MUTED);
-        connection.setGravity(Gravity.CENTER);
-        center.addView(connection, new LinearLayout.LayoutParams(-1, activity.dp(23)));
+        boolean landscape = activity.landscape();
+        LinearLayout panel = new LinearLayout(activity);
+        panel.setOrientation(landscape ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        persona = new AssistantPersona(activity, settings);
+        if (landscape) {
+            android.widget.FrameLayout stage = new android.widget.FrameLayout(activity);
+            int height = Math.max(155, activity.getResources().getConfiguration().screenHeightDp - 102);
+            body.addView(stage, new LinearLayout.LayoutParams(-1,activity.dp(height)));
+            stage.addView(persona, new android.widget.FrameLayout.LayoutParams(-1,-1));
+            stage.addView(panel, new android.widget.FrameLayout.LayoutParams(-1,-1));
+            panel.addView(new View(activity), new LinearLayout.LayoutParams(0,-1,.45f));
+            persona.wideStage();
+        } else {
+            body.addView(panel, new LinearLayout.LayoutParams(-1,-2));
+            panel.addView(persona, new LinearLayout.LayoutParams(-1,activity.dp(190)));
+        }
+        persona.animateWhileVisible(true);
+
+        LinearLayout info = activity.column();
+        info.setGravity(Gravity.CENTER_VERTICAL);
+        info.setPadding(activity.dp(18), 0, activity.dp(22), 0);
+        panel.addView(info, landscape ? new LinearLayout.LayoutParams(0,-1,.55f)
+            : new LinearLayout.LayoutParams(-1,-2));
+        TextView title = activity.text("", landscape ? 29 : 24, DeckTheme.INK);
+        android.text.SpannableString name = new android.text.SpannableString("Assistente Pião");
+        name.setSpan(new android.text.style.ForegroundColorSpan(DeckTheme.RED), 11, name.length(), 0);
+        title.setText(name);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        info.addView(title);
+        phase = activity.text("", 16, DeckTheme.MUTED);
+        phase.setMaxLines(2);
+        phase.setPadding(0, activity.dp(5), 0, 0);
+        phase.setOnClickListener(v -> { if (currentJob != null) taskDetails(); });
+        info.addView(phase);
         waveform = new VoiceOrb();
-        LinearLayout.LayoutParams orb = new LinearLayout.LayoutParams(activity.dp(113), activity.dp(113));
-        orb.topMargin = activity.dp(5);
-        center.addView(waveform, orb);
-        waveform.setOnClickListener(v -> toggle());
-        waveform.setFocusable(true);
-        phase = activity.text("Aguardando", 19, DeckTheme.INK);
-        phase.setGravity(Gravity.CENTER);
-        center.addView(phase, new LinearLayout.LayoutParams(-1, activity.dp(27)));
-        action = activity.text("Toque para conversar", 12, DeckTheme.MUTED);
-        action.setGravity(Gravity.CENTER);
-        action.setOnClickListener(v -> toggle());
-        center.addView(action, new LinearLayout.LayoutParams(-1, activity.dp(21)));
-        heard = activity.text("", 13, DeckTheme.MUTED);
-        heard.setGravity(Gravity.CENTER);
-        heard.setMaxLines(1);
-        caption = activity.text("", 16, DeckTheme.INK);
-        caption.setGravity(Gravity.CENTER);
-        caption.setMaxLines(3);
-        center.addView(heard);
-        center.addView(caption);
+        info.addView(waveform, new LinearLayout.LayoutParams(-1, activity.dp(50)));
+        transcript = activity.text("", 15, DeckTheme.INK);
+        transcript.setMaxLines(2);
+        transcript.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        transcript.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        transcript.setVisibility(View.GONE);
+        info.addView(transcript);
+        replyCaption = activity.text("", 15, DeckTheme.INK);
+        replyCaption.setMaxLines(3);
+        replyCaption.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        replyCaption.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        replyCaption.setVisibility(View.GONE);
+        replyCaption.setOnClickListener(v -> new AlertDialog.Builder(activity)
+            .setTitle("Resposta do Pião").setMessage(replyCaption.getText())
+            .setPositiveButton("Fechar", null).show());
+        info.addView(replyCaption);
+
+        LinearLayout controls = activity.row(body);
+        action = activity.tile("mic", "Falar", DeckTheme.INK, DeckTheme.RED, this::toggle);
+        activity.addWeighted(controls, action, 48);
+        LinearLayout.LayoutParams talkSize = (LinearLayout.LayoutParams) action.getLayoutParams();
+        talkSize.weight = 1.65f;
+        action.setLayoutParams(talkSize);
+        activity.inlineIcon(action,"mic","Falar");
+        TextView interrupt = activity.tile("close", "Interromper", DeckTheme.INK, DeckTheme.PANEL, this::interruptCurrent);
+        activity.inlineIcon(interrupt,"close","Interromper");
+        activity.addWeighted(controls, interrupt, 48);
+        TextView end = activity.tile("power", "Encerrar", DeckTheme.INK, DeckTheme.PANEL, () -> {
+            stop();
+            state("Sessão encerrada");
+        });
+        activity.inlineIcon(end,"power","Encerrar");
+        activity.addWeighted(controls, end, 48);
         setAction(false);
+        state(online ? "Pronto para te ouvir." : "Windows desconectado");
         connection(online);
+    }
+
+    private boolean taskActive() {
+        if (currentJob == null) return false;
+        String status = currentJob.optString("state");
+        return status.equals("Executando") || status.equals("Validando") ||
+            status.equals("Planejada") || status.equals("Aguardando autorização");
+    }
+
+    void task(JSONObject response) {
+        if (!visible) return;
+        currentJob = response == null ? null : response.optJSONObject("job");
+        if (phase == null || (session != null && !session.readyForInput)) return;
+        if (taskActive()) state(currentJob.optString("state").equals("Aguardando autorização")
+            ? "Aguardando autorização · toque para ver o plano" : "Executando tarefa · toque para ver o plano");
+        else if (phase.getText().toString().contains("· toque para ver o plano"))
+            state(currentJob == null ? "Pronto para te ouvir." : "Tarefa " + currentJob.optString("state").toLowerCase(java.util.Locale.ROOT) + " · ver detalhes");
+    }
+
+    private void showTranscript(String text) {
+        if (transcript == null) return;
+        transcript.setText(text.isEmpty() ? "" : "Entendi: " + text);
+        transcript.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void showReply(String text) {
+        if (replyCaption == null) return;
+        replyCaption.setText(text.isEmpty() ? "" : "Pião: " + text);
+        replyCaption.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void state(String status) {
+        phase.setText(status);
+        int mode = status.startsWith("Ouvindo") ? 1 : status.startsWith("Processando") || status.startsWith("Conectando")
+            || status.startsWith("Preparando") ? 2 : status.startsWith("Respondendo") ? 3 : status.startsWith("Executando") ? 4
+            : !connected ? 5 : 0;
+        if (persona != null) persona.state(mode);
+        if (waveform != null) waveform.setMode(mode);
+    }
+
+    private void interruptCurrent() {
+        Session active = session;
+        if (active != null && !active.readyForInput) {
+            active.waitingGreeting = false;
+            active.discardCapture = true;
+            active.capturing = false;
+            state("Interrompendo…");
+            active.stopTurn();
+        } else if (taskActive()) {
+            activity.operatorDecision(currentJob.optString("id"), "cancel");
+        } else state("Nenhuma resposta ou tarefa em andamento");
+    }
+
+    private void taskDetails() {
+        if (currentJob == null) { activity.assistantNotice("Nenhuma tarefa registrada."); return; }
+        JSONObject job = currentJob;
+        String id = job.optString("id");
+        String state = job.optString("state");
+        StringBuilder detail = new StringBuilder(state);
+        try {
+            long seconds = java.time.Duration.between(java.time.OffsetDateTime.parse(job.getString("started")),
+                state.equals("Executando") || state.equals("Validando") ? java.time.OffsetDateTime.now() :
+                    java.time.OffsetDateTime.parse(job.getString("updated"))).getSeconds();
+            detail.append(" · ").append(Math.max(0, seconds)).append(" s");
+        } catch (Exception ignored) { }
+        org.json.JSONArray steps = job.optJSONArray("steps");
+        if (steps != null) for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null) continue;
+            detail.append("\n\n").append(i + 1).append(". ").append(step.optString("description"))
+                .append(" · ").append(step.optString("state"));
+            if (!step.isNull("result")) detail.append("\n").append(step.optString("result"));
+        }
+        AlertDialog.Builder dialog = new AlertDialog.Builder(activity).setTitle("Tarefa em andamento")
+            .setMessage(detail).setNegativeButton("Fechar", null);
+        if (state.equals("Aguardando autorização"))
+            dialog.setPositiveButton("Autorizar plano", (d, w) -> activity.operatorDecision(id, "approve"));
+        if (state.equals("Executando") || state.equals("Validando") || state.equals("Planejada") ||
+            state.equals("Aguardando autorização"))
+            dialog.setNeutralButton("Cancelar tarefa", (d, w) -> activity.operatorDecision(id, "cancel"));
+        dialog.show();
     }
 
     private void toggle() {
         if (session == null) { attempted = false; advance(); return; }
         if (session.capturing) {
             session.capturing = false;
-            phase.setText("Processando");
-            action.setText("Aguarde a resposta");
+            state("Processando");
+            action.setContentDescription("Falar · aguarde a resposta");
             waveform.setContentDescription("Processando");
             waveform.setProgress(0);
         } else if (session.readyForInput) session.beginInput();
     }
 
     private void setAction(boolean running) {
-        action.setText(running ? "Aguarde um instante" : "Toque para conversar");
-        waveform.setContentDescription(running ? "Preparando Assistente" : "Iniciar conversa");
-        waveform.running = running;
-        waveform.invalidate();
+        action.setContentDescription(running ? "Falar · preparando" : "Falar");
     }
 
     private final class VoiceOrb extends View {
         private final Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private int level;
-        private boolean running;
+        private int level, mode;
 
-        VoiceOrb() { super(activity); setClickable(true); }
-        void setProgress(int value) { level = value; invalidate(); }
+        VoiceOrb() { super(activity); setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO); }
+        void setMode(int value) { if (mode != value) { mode = value; level = 0; invalidate(); } }
+        void setProgress(int value) {
+            level = value;
+            if (persona != null) persona.level(value);
+            invalidate();
+        }
 
         @Override protected void onDraw(Canvas c) {
             super.onDraw(c);
-            float x = getWidth()/2f, y = getHeight()/2f, radius = Math.min(x,y) - activity.dp(6);
-            ink.setColor(0xff080808);
-            c.drawCircle(x, y + activity.dp(3), radius, ink);
-            ink.setColor(isPressed() ? DeckTheme.DARK_RED : 0xff141414);
-            c.drawCircle(x, y, radius, ink);
-            ink.setStyle(Paint.Style.STROKE);
-            ink.setStrokeWidth(activity.dp(2));
-            ink.setColor(running ? DeckTheme.RED : DeckTheme.EDGE);
-            c.drawCircle(x, y, radius, ink);
-            ink.setStyle(Paint.Style.FILL);
-            ink.setColor(running ? DeckTheme.RED : DeckTheme.INK);
-            for (int i = -3; i <= 3; i++) {
-                float height = activity.dp(4 + (3 - Math.abs(i)) * 3)
-                    + (running ? level * (4 - Math.abs(i)) / 20f : 0f);
-                float bar = x + activity.dp(8) * i;
-                c.drawRoundRect(bar - activity.dp(2), y-height, bar+activity.dp(2), y+height,
-                    activity.dp(2), activity.dp(2), ink);
+            float middle = getHeight() / 2f;
+            float spacing = Math.min(activity.dp(11), getWidth()/28f);
+            float center = getWidth()/2f;
+            double tick = android.os.SystemClock.uptimeMillis()/180.0;
+            ink.setColor(mode == 0 ? 0xff55252a : DeckTheme.RED);
+            for (int i = -10; i <= 10; i++) {
+                float weight = 1f-Math.abs(i)/11f;
+                float pulse = (float)(.45 + .55 * Math.abs(Math.sin(i*.85 + tick)));
+                float h = activity.dp(2) + weight * activity.dp(5)
+                    + weight * pulse * activity.dp(mode == 1 || mode == 3 ? level/5f : mode == 0 ? 0 : 9);
+                float x = center+i*spacing, w = spacing*.25f;
+                c.drawRoundRect(x-w,middle-h,x+w,middle+h,w,w,ink);
             }
+            if (mode != 0 && visible && isShown() && getWindowVisibility()==VISIBLE) postInvalidateDelayed(50);
         }
     }
 
@@ -127,23 +249,21 @@ final class VoiceDeck {
         boolean returned = !connected && online;
         connected = online;
         if (!visible) return;
-        connection.setText(!online ? "○ Windows desconectado" :
-            session != null && !session.source.isEmpty() ? session.source : "● Windows conectado · Voz local");
         if (!online && session != null) {
             stop();
-            caption.setText("Aguardando a conexão USB.");
+            state("Aguardando a conexão USB.");
         }
-        if (returned) attempted = false;
-        advance();
+        if (returned) { attempted = false; if (session == null && !taskActive()) state("Pronto para te ouvir."); }
+        else if (!online && session == null) state("Windows desconectado");
     }
 
     private void advance() {
         if (!visible || attempted || session != null) return;
         if (!settings.getBoolean("assistant-enabled", true)) {
-            caption.setText("Ative o Assistente nas Configurações.");
+            state("Ative o Assistente nas Configurações.");
             return;
         }
-        if (!connected) return;
+        if (!connected) { state("Windows desconectado"); return; }
         attempted = true;
         start(false);
     }
@@ -153,7 +273,7 @@ final class VoiceDeck {
         testing = test;
         if (!test && !settings.getBoolean("local-voice-consent", false)) {
             new AlertDialog.Builder(activity).setTitle("Conversa por voz")
-                .setMessage("O microfone grava apenas entre dois toques. Toque para falar e toque novamente para enviar. O áudio é processado localmente no Windows. Ao sair ou encerrar, a captura para. O Windows pode usar seu microfone padrão se o do celular falhar.")
+                .setMessage("A gravação usa a entrada padrão do Windows. Toque para falar e toque novamente para enviar. A resposta sai pela saída padrão do computador.")
                 .setNegativeButton("Agora não", (dialog, which) -> idle("Conversa não iniciada."))
                 .setPositiveButton("Permitir", (dialog, which) -> {
                     settings.edit().putBoolean("local-voice-consent", true).apply();
@@ -162,7 +282,7 @@ final class VoiceDeck {
             return;
         }
         if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
-            && !settings.getBoolean("realtime-pc-mic", false)) {
+            && test) {
             requesting = true;
             activity.requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, PERMISSION);
             return;
@@ -188,32 +308,31 @@ final class VoiceDeck {
             return;
         }
         if (!visible || session != null) return;
-        session = new Session(!allowed || settings.getBoolean("realtime-pc-mic", false));
-        phase.setText("Conectando");
-        caption.setText("");
-        heard.setText("");
+        session = new Session(true);
+        state("Conectando");
         setAction(true);
         new Thread(session::run, "deck-voice-link").start();
     }
 
-    void hide() { visible = false; stop(); attempted = false; }
+    void hide() { showTranscript(""); if (persona != null) persona.animateWhileVisible(false); visible = false; stop(); attempted = false; }
     void destroy() { hide(); }
     void stop() {
         if (session != null) { session.capturing = false; session.close(); session = null; }
         if (visible) {
-            phase.setText("Aguardando");
+            state("Aguardando");
             waveform.setProgress(0);
             setAction(false);
         }
     }
     void suspend() {
+        if (persona != null) persona.animateWhileVisible(false);
         stop();
         if (!requesting) attempted = false;
     }
 
-    void resume() { if (!requesting && visible && session == null && !attempted) advance(); }
+    void resume() { if (visible && persona != null) persona.animateWhileVisible(true); }
 
-    private void idle(String message) { stop(); if (visible) caption.setText(message); }
+    private void idle(String message) { stop(); if (visible) state(message); }
 
     private String greeting() {
         if (!settings.getBoolean("realtime-greeting", true)) return "";
@@ -223,12 +342,12 @@ final class VoiceDeck {
         String time = now.format(DateTimeFormatter.ofPattern("HH:mm", pt));
         String period = now.getHour() < 12 ? "Bom dia" : now.getHour() < 18 ? "Boa tarde" : "Boa noite";
         String[] lines = greeted
-            ? new String[]{"E aí, Rian, bora continuar?", "Fala, Rian! Manda aí.", "Voltei, Rian. Qual vai ser?", "Tô aqui, Rian. Bora?"}
+            ? new String[]{"E aí{nome}, bora continuar?", "Fala{nome}! Manda aí.", "Voltei{nome}. Qual vai ser?", "Tô aqui{nome}. Bora?"}
             : new String[]{
-                period + ", Rian! Hoje é " + day + ", são " + time + ". Bora começar?",
-                "Fala, Rian! " + period + "! São " + time + ". O que manda?",
-                "E aí, Rian! Já estamos na " + day + ". O que a gente vai fazer?",
-                period + ", Rian! São " + time + " e o PC tá conectado. Manda aí!"};
+                period + "{nome}! Hoje é " + day + ", são " + time + ". Bora começar?",
+                "Fala{nome}! " + period + "! São " + time + ". O que manda?",
+                "E aí{nome}! Já estamos na " + day + ". O que a gente vai fazer?",
+                period + "{nome}! São " + time + " e o PC tá conectado. Manda aí!"};
         String key = greeted ? "local-last-short-greeting" : "local-last-welcome-greeting";
         int previous = settings.getInt(key, -1);
         int index = java.util.concurrent.ThreadLocalRandom.current().nextInt(previous < 0 ? lines.length : lines.length - 1);
@@ -253,27 +372,39 @@ final class VoiceDeck {
         final String welcome = greeting();
         final int idleSeconds = settings.getInt("realtime-idle", 90);
         final Object playbackGate = new Object();
-        final String voice = settings.getString("local-piper-voice-output", "pt_BR-edresson-low");
-        final boolean phoneSpeaker = settings.getBoolean("local-phone-speaker", false);
+        {
+        if (!settings.getBoolean("local-voice-profile-refined", false)) {
+            android.content.SharedPreferences.Editor migration = settings.edit()
+                .putBoolean("local-voice-profile-refined", true);
+            if ("pt_BR-edresson-low".equals(settings.getString("local-piper-voice-output", "")))
+                migration.putString("local-piper-voice-output", "pt_BR-faber-medium");
+            if (settings.getInt("local-speech-speed", 106) == 118) migration.putInt("local-speech-speed", 106);
+            if (settings.getInt("local-speech-pause", 17) == 10) migration.putInt("local-speech-pause", 17);
+            migration.apply();
+        }
+        }
+        final String voice = settings.getString("local-piper-voice-output", "pt_BR-faber-medium");
+        final boolean phoneSpeaker = false;
         final float volume = settings.getInt("realtime-volume", 80) / 100f;
-        final float speed = settings.getInt("local-speech-speed", 118) / 100f;
-        final float pause = settings.getInt("local-speech-pause", 10) / 100f;
+        final float speed = settings.getInt("local-speech-speed", 106) / 100f;
+        final float pause = settings.getInt("local-speech-pause", 17) / 100f;
         final boolean respectMedia = settings.getBoolean("realtime-respect-media", true);
         volatile boolean closed;
         volatile AudioTrack playback;
         volatile long activityAt = android.os.SystemClock.elapsedRealtime();
         String item = "";
         int content, itemStart = -1;
-        volatile boolean capturing;
+        volatile boolean capturing, discardCapture;
         boolean readyForInput;
+        String actionResult = "";
         void enableInput() {
             readyForInput = true;
-            phase.setText("Aguardando");
-            action.setText("Toque para falar");
+            state(actionResult.isEmpty() ? "Aguardando" : actionResult);
+            actionResult = "";
+            action.setContentDescription("Falar");
             waveform.setContentDescription("Toque para falar");
             waveform.setProgress(0);
-            waveform.running = false;
-            waveform.invalidate();
+
         }
         volatile boolean waitingGreeting = !welcome.isEmpty();
         String error = "Serviço de voz desconectado.";
@@ -306,9 +437,9 @@ final class VoiceDeck {
                     switch (message.optString("type")) {
                         case "ready":
                             waitingGreeting = message.optBoolean("greeting");
-                            ui(() -> { greeted = true; phase.setText(waitingGreeting ? "Preparando saudação" : "Ouvindo"); });
+                            ui(() -> { greeted = true; state(waitingGreeting ? "Preparando saudação" : "Ouvindo"); });
                             if (phoneSpeaker) new Thread(this::play, "deck-voice-output").start();
-                            if (!waitingGreeting) ui(this::enableInput);
+                            if (!waitingGreeting) ui(() -> { enableInput(); beginInput(); });
                             new Thread(this::watch, "deck-voice-timeout").start();
                             break;
                         case "audio":
@@ -320,31 +451,42 @@ final class VoiceDeck {
                                     itemStart = -1;
                                 }
                             }
-                            ui(() -> phase.setText("Respondendo"));
+                            ui(() -> state("Respondendo"));
                             break;
-                        case "interrupt": interrupt(); ui(() -> phase.setText("Ouvindo")); break;
-                        case "thinking": ui(() -> phase.setText("Processando")); break;
+                        case "interrupt": interrupt(); ui(() -> state("Ouvindo")); break;
+                        case "thinking": ui(() -> state("Processando")); break;
+                        case "action_result": ui(() -> {
+                            actionResult = message.optString("text");
+                            showReply(actionResult);
+                            if (persona != null) persona.reaction(actionResult.startsWith("Abri") ||
+                                actionResult.startsWith("Pasta aberta") || actionResult.startsWith("Pesquisa enviada"));
+                        }); break;
                         case "level": ui(() -> waveform.setProgress(message.optInt("value"))); break;
                         case "done":
+                            boolean greetedNow = waitingGreeting;
                             waitingGreeting = false;
                             if (phoneSpeaker) audio.offer(new byte[0]);
-                            else ui(this::enableInput);
+                            else ui(() -> { enableInput(); if (greetedNow) beginInput(); });
                             break;
                         case "heard":
                             activityAt = android.os.SystemClock.elapsedRealtime();
-                            ui(() -> heard.setText(settings.getBoolean("realtime-captions", true) ? message.optString("text") : ""));
+                            ui(() -> showTranscript(message.optString("text")));
                             break;
+
                         case "caption":
-                            ui(() -> caption.setText(settings.getBoolean("realtime-captions", true) ? message.optString("text") : ""));
+                            String note = message.optString("text");
+                            if (note.startsWith("Não detectei") || note.startsWith("Não consegui") || note.startsWith("Deu problema"))
+                                ui(() -> activity.assistantNotice(note));
+                            ui(() -> showReply(note));
                             break;
                         case "source":
                             source = message.optString("text");
-                            ui(() -> connection.setText(source));
+
                             break;
                         case "confirm":
                             ui(() -> {
                                 String id = message.optString("id");
-                                phase.setText("Confirmação no telefone");
+                                state("Confirmação no telefone");
                                 confirmation = new AlertDialog.Builder(activity).setTitle("Confirme a ação")
                                     .setMessage(message.optString("text"))
                                     .setNegativeButton("Cancelar", (d, w) -> decide(id, false))
@@ -368,16 +510,23 @@ final class VoiceDeck {
         void beginInput() {
             if (!readyForInput || closed) return;
             readyForInput = false;
+            discardCapture = false;
+            showTranscript("");
+            showReply("");
             capturing = true;
-            phase.setText("Ouvindo");
-            action.setText("Toque para enviar");
+            state("Ouvindo · toque em Falar para enviar");
+            action.setContentDescription("Falar · enviar gravação");
             waveform.setContentDescription("Toque para enviar");
-            waveform.running = true;
-            waveform.invalidate();
-            caption.setText("");
-            heard.setText("");
+
             new Thread(this::record, "deck-voice-input").start();
         }
+        void stopTurn() {
+            new Thread(() -> {
+                try { json(event("stop_turn")); }
+                catch (Exception error) { closeFromWorker(); }
+            }, "deck-voice-stop").start();
+        }
+
         void decide(String id, boolean allowed) {
             new Thread(() -> {
                 try { json(event("decision").put("id", id).put("allow", allowed)); }
@@ -419,7 +568,7 @@ final class VoiceDeck {
                 }
                 input.startRecording();
                 source = "● Microfone do celular · USB";
-                ui(() -> connection.setText(source));
+
                 byte[] pcm = new byte[1920];
                 while (!closed && capturing) {
                     int count = input.read(pcm, 0, pcm.length);
@@ -433,7 +582,7 @@ final class VoiceDeck {
                 if (echo != null) echo.release();
                 if (noise != null) noise.release();
                 if (input != null) input.release();
-                if (!closed) {
+                if (!closed && !discardCapture) {
                     try { json(event("submit_capture")); }
                     catch (Exception transport) { closeFromWorker(); }
                 }

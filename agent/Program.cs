@@ -16,6 +16,7 @@ if (!File.Exists(editorKeyFile))
     File.WriteAllText(editorKeyFile, Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
 var editorExpected = Encoding.UTF8.GetBytes("Bearer " + File.ReadAllText(editorKeyFile).Trim());
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = AppContext.BaseDirectory });
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Services.AddHttpClient("ollama", c =>
 {
     c.BaseAddress = new Uri("http://127.0.0.1:11434/");
@@ -40,7 +41,8 @@ app.UseWebSockets();
 var shortcuts = new DesktopShortcuts(builder.Configuration);
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path == "/editor" && HttpMethods.IsGet(context.Request.Method))
+    if ((context.Request.Path == "/editor" || context.Request.Path == "/google/return") &&
+        HttpMethods.IsGet(context.Request.Method))
     {
         await next(context);
         return;
@@ -72,10 +74,20 @@ var actions = new Dictionary<string, Action>
     ["next"] = () => Win32.PressKey(0xB0),
     ["spotify"] = () => Win32.Open("https://open.spotify.com/"),
     ["youtube"] = () => Win32.Open("https://www.youtube.com/"),
+    ["linkedin"] = () => Win32.Open("https://www.linkedin.com/"),
+    ["instagram"] = () => Win32.Open("https://www.instagram.com/"),
+    ["gmail"] = () => Win32.Open("https://mail.google.com/"),
+    ["calendar"] = () => Win32.Open("https://calendar.google.com/"),
     ["codex"] = shortcuts.Codex,
     ["cursor"] = shortcuts.Cursor,
     ["miro"] = shortcuts.Miro,
-    ["serpro"] = () => Win32.Open("https://gitcorporativo.serpro/"),
+    ["serpro"] = () =>
+    {
+        if (!Uri.TryCreate(builder.Configuration["deck-serpro-url"], UriKind.Absolute, out var url)
+            || url.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Configure deck-serpro-url no agente.");
+        Win32.Open(url.AbsoluteUri);
+    },
     ["steam"] = () => Win32.Open("steam://open/main"),
     ["workspace"] = () => Win32.PressWindowsKey(0x44),
     ["browser"] = () => Win32.Open("https://www.google.com/"),
@@ -128,11 +140,25 @@ app.MapPost("/v1/action/{id}", (string id) =>
 });
 using var gpu = new GpuMetrics();
 var metrics = new WindowsMetrics(gpu, app.Services.GetRequiredService<GpuTemperature>());
+app.MapGet("/v1/ping", () => Results.Ok(new { connected = true }));
 app.MapGet("/v1/status", () => metrics.Sample());
-var assistant = new DeckAssistant(builder.Configuration, metrics, actions, studio);
+var google = new GoogleRead(builder.Configuration);
+app.MapGet("/google/return", (Func<HttpContext, Task<IResult>>)(context =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    return google.Complete(context);
+}));
+var assistant = new DeckAssistant(builder.Configuration, metrics, actions, studio, google);
 app.MapGet("/v1/assistant", () => assistant.Status());
 using var localEngine = new LocalVoiceEngine(builder.Configuration, app.Services.GetRequiredService<IHttpClientFactory>());
-var realtime = new LocalVoiceSession(localEngine, assistant, media);
+var operation = new AssistedExecutionEngine(new WindowsActionExecutor(builder.Configuration, shortcuts, actions),
+    assistant, builder.Configuration, Path.Combine(studioDirectory, "assisted-history.json"));
+app.MapGet("/v1/operator", () => new { job = operation.Latest() });
+app.MapGet("/v1/operator/history", () => operation.History());
+app.MapPost("/v1/operator/{id}/approve", (string id) => operation.Approve(id) ? Results.NoContent() : Results.Conflict());
+app.MapPost("/v1/operator/{id}/cancel", (string id) => operation.Cancel(id) ? Results.NoContent() : Results.Conflict());
+var realtime = new LocalVoiceSession(localEngine, assistant, media, operation);
 app.MapGet("/v1/assistant/realtime", realtime.Run);
 app.MapPost("/v1/assistant/windows-mic", async (CancellationToken token) =>
     Results.Ok(new { text = await WindowsVoiceInput.Test(token) }));
@@ -198,6 +224,7 @@ internal sealed class UsbDeckSession(UsbDeckOptions options) : BackgroundService
             }
             if (!opened)
             {
+                await Adb(stoppingToken, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
                 var launch = await Adb(stoppingToken, "shell", "am", "start", "-n",
                     "br.com.rian.deck/.DeckActivity");
                 opened = launch?.Contains("Starting:", StringComparison.Ordinal) == true;

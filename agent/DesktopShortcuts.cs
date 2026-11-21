@@ -25,6 +25,20 @@ internal sealed class DesktopShortcuts(IConfiguration config)
         throw new FileNotFoundException("Instalação do Cursor indisponível.");
     }
 
+    internal void CursorProject(string project)
+    {
+        string? exe = new[] { config["deck-cursor"], RegisteredCursor(),
+            Path.Combine(Local, "Programs", "cursor", "Cursor.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Cursor", "Cursor.exe") }
+            .FirstOrDefault(path => path != null && Path.IsPathFullyQualified(path) &&
+                Path.GetExtension(path).Equals(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(path));
+        if (exe is null) throw new InvalidOperationException("Executável do Cursor indisponível.");
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+        start.ArgumentList.Add("--new-window");
+        start.ArgumentList.Add(project);
+        Process.Start(start)?.Dispose();
+    }
+
     private static string? RegisteredCursor()
     {
         if (!OperatingSystem.IsWindows()) return null;

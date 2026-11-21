@@ -81,7 +81,25 @@ public final class DeckActivity extends Activity {
     private final MemeStatus.Band[] bands = new MemeStatus.Band[METRIC_IDS.length];
     private final int[] levels = new int[METRIC_IDS.length];
     private String memeImportSlot;
-    private TextView date;
+    private TextView battery;
+    private int batteryPercent = -1;
+    private boolean batteryCharging;
+    private boolean plugged;
+    private long lastTouch;
+    private long deckCheckedAt;
+    private final android.content.BroadcastReceiver batteryUpdates = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(android.content.Context context, android.content.Intent intent) {
+            int level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 0);
+            batteryPercent = level < 0 || scale <= 0 ? -1 : Math.round(level * 100f / scale);
+            int state = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            plugged = intent.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0;
+            batteryCharging = state == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                (state == android.os.BatteryManager.BATTERY_STATUS_FULL && plugged);
+            updateBatteryLabel();
+            if (active) applyPowerPolicy();
+        }
+    };
     private MiniMetrics summary;
     private TextView pcStatus, clock;
     private DeckButton3D microphone;
@@ -144,12 +162,17 @@ public final class DeckActivity extends Activity {
     private LinearLayout commandGrid;
     private float swipeX, swipeY;
     private boolean commandSwipe;
+    private boolean pagingDrag;
+    private final int[] touchOrigin = new int[2];
     private boolean editingButtons;
     private VerseCard verse;
     private VerseCard.Verse dailyVerse;
     private String verseDate;
     private boolean verseLoading;
     private Bitmap verseArtwork;
+    private static final long VERSE_INTERVAL = 6 * 60 * 60 * 1000L;
+    private static final long VERSE_RETRY = 5 * 60 * 1000L;
+    private long verseFetchedAt, artworkFetchedAt;
     private String artworkDate = "";
     private boolean artworkLoading;
     private Typeface brandTypeface;
@@ -179,6 +202,7 @@ public final class DeckActivity extends Activity {
         } catch (org.json.JSONException missing) { remote = null; }
         editingButtons = saved != null && saved.getBoolean("editingButtons");
         verseDate = settings.getString("verse-date", "");
+        verseFetchedAt = settings.getLong("verse-fetched-at", 0L);
         String cachedPassage = settings.getString("verse-text", "");
         if (!cachedPassage.isEmpty()) {
             dailyVerse = new VerseCard.Verse(settings.getString("verse-reference", "Biblia.com"), cachedPassage);
@@ -238,35 +262,62 @@ public final class DeckActivity extends Activity {
     @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
         int action = event.getActionMasked();
         if (action == android.view.MotionEvent.ACTION_DOWN) {
+            lastTouch = android.os.SystemClock.elapsedRealtime();
+            if (economyEnabled()) applyPowerPolicy();
             commandSwipe = false;
-            if (section == 0 && commandGrid != null && pageCount > 1) {
-                int[] position = new int[2];
-                commandGrid.getLocationOnScreen(position);
+            pagingDrag = false;
+            if (section == 0 && !editingButtons && pageCount > 1) {
                 swipeX = event.getRawX();
                 swipeY = event.getRawY();
-                commandSwipe = swipeX >= position[0] && swipeY >= position[1]
-                    && swipeX < position[0] + commandGrid.getWidth()
-                    && swipeY < position[1] + commandGrid.getHeight();
+                commandSwipe = touched(body) && !touched(mediaProgress);
             }
-        } else if (action == android.view.MotionEvent.ACTION_UP && commandSwipe) {
+        } else if (action == android.view.MotionEvent.ACTION_CANCEL ||
+            action == android.view.MotionEvent.ACTION_POINTER_DOWN) {
             commandSwipe = false;
+            if (pagingDrag) {
+                if (action == android.view.MotionEvent.ACTION_CANCEL) pagingDrag = false;
+                return true;
+            }
+        } else if (commandSwipe || pagingDrag) {
             float x = event.getRawX() - swipeX;
             float y = event.getRawY() - swipeY;
-            if (Math.abs(x) > dp(65) && Math.abs(x) > 2 * Math.abs(y)) {
+            boolean horizontal = Math.abs(x) > Math.abs(y) * 1.35f;
+            if (commandSwipe && action == android.view.MotionEvent.ACTION_MOVE && !pagingDrag &&
+                Math.abs(x) > dp(22) && horizontal) {
                 android.view.MotionEvent cancel = android.view.MotionEvent.obtain(event);
                 cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);
                 super.dispatchTouchEvent(cancel);
                 cancel.recycle();
-                movePage(x < 0 ? 1 : -1, pageCount);
+                pagingDrag = true;
+            } else if (!pagingDrag && Math.abs(y) > dp(20) && Math.abs(y) > Math.abs(x)) {
+                commandSwipe = false;
+            }
+            if (action == android.view.MotionEvent.ACTION_UP) {
+                boolean consumed = pagingDrag;
+                boolean advance = commandSwipe && pagingDrag && horizontal && Math.abs(x) >= dp(48)
+                    && section == 0 && !editingButtons;
+                commandSwipe = pagingDrag = false;
+                if (advance) movePage(x < 0 ? 1 : -1, pageCount);
+                if (consumed) return true;
+            } else if (pagingDrag) {
                 return true;
             }
         }
         return super.dispatchTouchEvent(event);
     }
 
+    private boolean touched(View view) {
+        if (view == null || !view.isShown()) return false;
+        view.getLocationOnScreen(touchOrigin);
+        return swipeX >= touchOrigin[0] && swipeX < touchOrigin[0] + view.getWidth()
+            && swipeY >= touchOrigin[1] && swipeY < touchOrigin[1] + view.getHeight();
+    }
+
     @Override protected void onStart() {
         super.onStart();
+        registerReceiver(batteryUpdates, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
         active = true;
+        lastTouch = android.os.SystemClock.elapsedRealtime();
         android.os.PowerManager power = getSystemService(android.os.PowerManager.class);
         thermal = power.getCurrentThermalStatus();
         power.addThermalStatusListener(getMainExecutor(), thermalListener);
@@ -287,6 +338,7 @@ public final class DeckActivity extends Activity {
     }
 
     @Override protected void onStop() {
+        unregisterReceiver(batteryUpdates);
         assistant.suspend();
         active = false;
         for (Graph graph : graphs) if (graph != null) graph.meme.pause();
@@ -321,7 +373,7 @@ public final class DeckActivity extends Activity {
         LinearLayout brand = new LinearLayout(this);
         brand.setGravity(Gravity.CENTER_VERTICAL);
         brand.addView(name);
-        TextView version = text("v5.1", 10, SOFT);
+        TextView version = text("v5.3", 10, SOFT);
         version.setPadding(dp(6), dp(3), dp(6), dp(3));
         version.setBackground(shape(CARD, 6));
         LinearLayout.LayoutParams badge = new LinearLayout.LayoutParams(-2, -2);
@@ -342,13 +394,12 @@ public final class DeckActivity extends Activity {
         clock = text("", 18, INK);
         clock.setPadding(dp(9), 0, dp(3), 0);
         clock.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        LinearLayout timing = column();
-        timing.setGravity(Gravity.END);
-        date = text("", 10, SOFT);
-        date.setPadding(dp(5), 0, dp(3), 0);
-        timing.addView(clock);
-        timing.addView(date);
-        indicators.addView(timing);
+        indicators.addView(clock);
+        battery = text("", 12, SOFT);
+        battery.setPadding(dp(6), 0, 0, 0);
+        battery.setSingleLine(true);
+        indicators.addView(battery);
+        updateBatteryLabel();
         refreshHeader();
         root.addView(top, new LinearLayout.LayoutParams(-1, dp(37)));
 
@@ -370,6 +421,8 @@ public final class DeckActivity extends Activity {
     private void navigate(int index, boolean animate) {
         if (section == 2 && index != 2) assistant.hide();
         section = index;
+        main.removeCallbacks(poll);
+        if (active) main.post(poll);
         editingButtons = false;
         display(animate);
     }
@@ -421,13 +474,19 @@ public final class DeckActivity extends Activity {
     private void refreshHeader() {
         status.update(connected);
         updateKioskStatus();
-        boolean wide = landscape();
-        pcStatus.setText(connected ? (wide ? "●  PC conectado" : "● PC") : (wide ? "●  PC offline" : "● PC"));
+        pcStatus.setText("●");
         pcStatus.setTextColor(connected ? 0xff83cf9f : SOFT);
         pcStatus.setContentDescription(connected ? "PC conectado" : "PC offline");
         clock.setText(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")));
-        date.setText(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM",
-            new Locale("pt", "BR"))));
+    }
+
+    private void updateBatteryLabel() {
+        if (battery == null) return;
+        String percent = batteryPercent < 0 ? "—" : batteryPercent + "%";
+        battery.setText((batteryCharging ? "⚡ " : "") + percent);
+        battery.setTextColor(batteryCharging ? MINT : SOFT);
+        battery.setContentDescription(batteryPercent < 0 ? "Bateria indisponível" :
+            "Bateria " + percent + (batteryCharging ? ", carregando" : ", sem carregar"));
     }
 
     boolean landscape() {
@@ -476,6 +535,7 @@ public final class DeckActivity extends Activity {
         weatherText = text("", 13, INK);
         weatherText.setGravity(Gravity.CENTER_VERTICAL);
         weatherText.setMaxLines(3);
+        weatherText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         weatherText.setAutoSizeTextTypeUniformWithConfiguration(10, 13, 1,
             android.util.TypedValue.COMPLEX_UNIT_SP);
         weatherText.setPadding(dp(11), 0, dp(10), 0);
@@ -561,6 +621,7 @@ public final class DeckActivity extends Activity {
         LinearLayout player = column();
         player.setPadding(dp(11), dp(10), dp(11), dp(9));
         player.setBackground(shape(CARD, 15));
+        player.setForeground(new VisualAssets.Frame(dp(15),dp(1)));
         container.addView(player, new LinearLayout.LayoutParams(-1, wide ? 0 : dp(238), wide ? 1 : 0));
         TextView heading = text("Mídia do Windows", 13, 0xfff16b75);
         heading.setTypeface(Typeface.DEFAULT_BOLD);
@@ -622,6 +683,7 @@ public final class DeckActivity extends Activity {
         profiles.setGravity(Gravity.CENTER_VERTICAL);
         profiles.setPadding(dp(5), 0, dp(4), 0);
         profiles.setBackground(shape(CARD, 13));
+        profiles.setForeground(new VisualAssets.Frame(dp(13),dp(1)));
         LinearLayout.LayoutParams profileSize = new LinearLayout.LayoutParams(-1, dp(52));
         profileSize.topMargin = dp(6);
         container.addView(profiles, profileSize);
@@ -725,7 +787,11 @@ public final class DeckActivity extends Activity {
         worker.execute(() -> {
             try {
                 request("POST", "/v1/profile?auto=" + automatic + (id == null ? "" : "&id=" + Uri.encode(id)), 204);
-                main.post(() -> { main.removeCallbacks(poll); if (active) main.post(poll); });
+                main.post(() -> {
+                    deckCheckedAt = 0;
+                    main.removeCallbacks(poll);
+                    if (active) main.post(poll);
+                });
             } catch (Exception error) {
                 main.post(() -> Toast.makeText(this, "Não foi possível alterar o perfil", Toast.LENGTH_SHORT).show());
             }
@@ -836,19 +902,30 @@ public final class DeckActivity extends Activity {
         long now = android.os.SystemClock.elapsedRealtime();
         if (connected) offlineSince = 0;
         else if (offlineSince == 0) offlineSince = now;
-        boolean sleeping = dedicated && !connected && now - offlineSince > 120000;
+        boolean sleeping = !connected && now - offlineSince >= 5000;
         boolean tooHot = thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE;
+        boolean economy = economyEnabled();
+        boolean idleOnBattery = economy && !plugged && now - lastTouch >= 45_000;
         android.view.WindowManager.LayoutParams attributes = getWindow().getAttributes();
-        float target = tooHot || sleeping ? .08f : dedicated && ambient >= 0
+        float target = tooHot || sleeping || idleOnBattery ? .08f : economy
+            ? (float) Math.max(.13, Math.min(plugged ? .42 : .32,
+                ambient < 0 ? .26 : .13 + Math.log10(1 + ambient) * .10))
+            : dedicated && ambient >= 0
             ? (float) Math.max(.12, Math.min(.7, .13 + Math.log10(1 + ambient) * .16))
             : android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
         if (Math.abs(attributes.screenBrightness - target) > .025f) {
             attributes.screenBrightness = target;
             getWindow().setAttributes(attributes);
         }
-        if (tooHot || sleeping) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        else getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        boolean keepAwake = !tooHot && !sleeping && !idleOnBattery;
+        int flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+        if (keepAwake != ((attributes.flags & flag) != 0)) {
+            if (keepAwake) getWindow().addFlags(flag);
+            else getWindow().clearFlags(flag);
+        }
     }
+
+    private boolean economyEnabled() { return settings != null && settings.getBoolean("deck-economy", true); }
 
     private boolean armed() { return settings != null && settings.getBoolean(KioskPolicy.ARMED, false); }
 
@@ -1100,13 +1177,29 @@ public final class DeckActivity extends Activity {
         }
     }
 
+    private long verseDelay(long fetchedAt, String recordedDay, String today, long now) {
+        long remaining = fetchedAt + VERSE_INTERVAL - now;
+        return fetchedAt > 0 && fetchedAt <= now && today.equals(recordedDay) && remaining > 0
+            ? remaining : 0;
+    }
+
+    private void scheduleBibleRefresh() {
+        main.removeCallbacks(refreshBible);
+        if (!active) return;
+        long now = System.currentTimeMillis();
+        String day = java.time.LocalDate.now().toString();
+        long text = verseDelay(verseFetchedAt, verseDate, day, now);
+        long art = verseDelay(artworkFetchedAt, artworkDate, day, now);
+        main.postDelayed(refreshBible, Math.min(text > 0 ? text : VERSE_RETRY, art > 0 ? art : VERSE_RETRY));
+    }
+
     private void loadVerse() {
         if (verseLoading || isDestroyed()) return;
         String today = java.time.LocalDate.now().toString();
         String edition = settings.getString("verse-edition", "ara");
         loadVerseArtwork(today);
-        if (dailyVerse != null && today.equals(verseDate)) {
-            main.postDelayed(refreshBible, 600000);
+        if (dailyVerse != null && verseDelay(verseFetchedAt, verseDate, today, System.currentTimeMillis()) > 0) {
+            scheduleBibleRefresh();
             return;
         }
         verseLoading = true;
@@ -1131,19 +1224,19 @@ public final class DeckActivity extends Activity {
                 if (received != null) {
                     dailyVerse = received;
                     verseDate = today;
-                    settings.edit().putString("verse-date", today)
+                    verseFetchedAt = System.currentTimeMillis();
+                    settings.edit().putString("verse-date", today).putLong("verse-fetched-at", verseFetchedAt)
                         .putString("verse-reference", received.reference)
                         .putString("verse-text", received.passage).apply();
                 }
                 refreshVerseCard();
-                main.removeCallbacks(refreshBible);
-                if (active) main.postDelayed(refreshBible, received == null ? 60000 : 600000);
+                scheduleBibleRefresh();
             });
         });
     }
 
     private void loadVerseArtwork(String today) {
-        if (today.equals(artworkDate) || artworkLoading) return;
+        if (artworkLoading || verseDelay(artworkFetchedAt, artworkDate, today, System.currentTimeMillis()) > 0) return;
         artworkLoading = true;
         internet.execute(() -> {
             Bitmap picture = null;
@@ -1154,6 +1247,7 @@ public final class DeckActivity extends Activity {
                 connection.setReadTimeout(5500);
                 connection.setInstanceFollowRedirects(false);
                 connection.setRequestProperty("Authorization", "Bearer " + Pairing.TOKEN);
+                connection.setUseCaches(false);
                 if (connection.getResponseCode() == 200) {
                     BitmapFactory.Options options = new BitmapFactory.Options();
                     options.inSampleSize = 2;
@@ -1169,10 +1263,14 @@ public final class DeckActivity extends Activity {
             Bitmap received = picture;
             main.post(() -> {
                 artworkLoading = false;
-                if (isDestroyed() || received == null) return;
-                verseArtwork = received;
-                artworkDate = today;
-                if (verse != null) verse.artwork(received);
+                if (isDestroyed()) return;
+                if (received != null) {
+                    verseArtwork = received;
+                    artworkDate = today;
+                    artworkFetchedAt = System.currentTimeMillis();
+                    if (verse != null) verse.artwork(received);
+                }
+                scheduleBibleRefresh();
             });
         });
     }
@@ -1182,7 +1280,9 @@ public final class DeckActivity extends Activity {
         String photo = weather == null ? "cloud" : weather.wet() ? "rain"
             : !weather.day ? "night" : weather.code <= 1 ? "sun" : "cloud";
         Bitmap backdrop = VisualAssets.bitmap(this, "photos/" + photo + ".jpg");
-        weatherText.setBackground(new VisualAssets.Cover(backdrop, CARD, dp(12), false));
+        weatherText.setBackground(new VisualAssets.Cover(backdrop, CARD, dp(12), false, photo.equals("night")));
+        weatherText.setForeground(new VisualAssets.Frame(dp(12),dp(1)));
+        weatherText.setShadowLayer(dp(3), 0, dp(1), 0xff000000);
         String temperature = weather == null ? "" : weather.degrees + "°C";
         String condition = weather == null ? (weatherLoading ? "Consultando clima…" : "Clima indisponível")
             : weather.description();
@@ -1497,7 +1597,6 @@ public final class DeckActivity extends Activity {
         heading(body, "Assistente");
         LinearLayout voiceOptions = row(body);
         addWeighted(voiceOptions, tile("mic", "Preferências de voz", INK, CARD, this::voiceOptions), 46);
-        addWeighted(voiceOptions, tile("mic", "Testar microfone", INK, CARD, () -> assistant.start(true)), 46);
         addWeighted(voiceOptions, tile("codex", "Verificar Codex", INK, CARD, this::assistantStatus), 46);
         addWeighted(row(body), tile("mic", "Testar entrada do Windows", INK, CARD, () -> {
             new AlertDialog.Builder(this).setTitle("Testar entrada do Windows")
@@ -1512,6 +1611,12 @@ public final class DeckActivity extends Activity {
         heading(body, "Monitoramento");
         addWeighted(row(body), tile("chart", "Memes", INK, CARD, this::memeSettings), 45);
         heading(body, "Sistema");
+        addWeighted(row(body), tile("power", economyEnabled() ? "Economia de bateria · ativa" : "Economia de bateria · desativada",
+            INK, CARD, () -> {
+                settings.edit().putBoolean("deck-economy", !economyEnabled()).apply();
+                applyPowerPolicy();
+                display(false);
+            }), 46);
         LinearLayout displayOptions = row(body);
         boolean portrait = getResources().getConfiguration().orientation
             == android.content.res.Configuration.ORIENTATION_PORTRAIT;
@@ -1559,6 +1664,7 @@ public final class DeckActivity extends Activity {
                 .remove("verse-text").remove("verse-reference").apply();
             dailyVerse = null;
             verseDate = "";
+            verseFetchedAt = 0;
             main.removeCallbacks(refreshBible);
             if (active) main.post(refreshBible);
             display(false);
@@ -1598,21 +1704,34 @@ public final class DeckActivity extends Activity {
     private void pollStatus() {
         if (!active || pollRunning) return;
         pollRunning = true;
+        final int requestedSection = section;
+        boolean metricsNeeded = requestedSection == 0 || requestedSection == 1;
+        final boolean economy = economyEnabled();
+        final long started = android.os.SystemClock.elapsedRealtime();
+        boolean deckNeeded = requestedSection == 3 || requestedSection == 0 &&
+            (!economy || remote == null || started - deckCheckedAt >= 12_000);
         telemetry.execute(() -> {
-            JSONObject sample = readJson("/v1/status");
-            JSONObject configuration = sample == null ? null : readJson("/v1/deck");
-            JSONObject playing = sample == null ? null : readJson("/v1/media");
+            JSONObject sample = readJson(metricsNeeded ? "/v1/status" : "/v1/ping");
+            JSONObject task = sample != null && requestedSection == 2 ? readJson("/v1/operator") : null;
+            JSONObject configuration = sample == null || !deckNeeded ? null : readJson("/v1/deck");
+            JSONObject playing = sample == null || requestedSection != 0 ? null : readJson("/v1/media");
             main.post(() -> {
                 pollRunning = false;
                 if (!active) return;
+                boolean wasConnected = connected;
                 connected = sample != null;
+                if (!connected || !wasConnected) deckCheckedAt = 0;
+                if (configuration != null) deckCheckedAt = started;
                 refreshHeader();
-                if (section == 2) assistant.connection(connected);
-                micMuted = sample == null || sample.isNull("microphone") ? null : sample.optBoolean("microphone");
+                if (section == 2) { assistant.connection(connected); if (requestedSection == 2) assistant.task(task); }
+                if (metricsNeeded || !connected)
+                    micMuted = sample == null || sample.isNull("microphone") ? null : sample.optBoolean("microphone");
                 for (DeckButton3D key : remoteKeys) key.availability(connected);
                 refreshMicrophone();
-                network = sample == null ? null : sample.optJSONObject("network");
-                for (int i = 0; i < histories.length; i++) {
+                if (metricsNeeded) {
+                    network = sample == null ? null : sample.optJSONObject("network");
+                }
+                for (int i = 0; metricsNeeded && i < histories.length; i++) {
                     String id = METRIC_IDS[i];
                     double value = sample == null ? Double.NaN : sample.optDouble(id);
                     if (id.equals("network") && network != null)
@@ -1623,7 +1742,7 @@ public final class DeckActivity extends Activity {
                         id.equals("fps"), android.os.SystemClock.elapsedRealtime());
                     if (graphs[i] != null) graphs[i].update(connected);
                 }
-                media = playing;
+                if (requestedSection == 0 || !connected) media = playing;
                 applyDeck(configuration);
                 if (summary != null) summary.update();
                 refreshMedia();
@@ -1631,7 +1750,10 @@ public final class DeckActivity extends Activity {
                 refreshNetwork();
                 applyPowerPolicy();
                 main.removeCallbacks(poll);
-                main.postDelayed(poll, 2000);
+                long interval = !connected ? (economy ? 5000 : 2000)
+                    : economy && (requestedSection == 0 || requestedSection == 1 && !plugged) ? 4000
+                    : metricsNeeded ? 2000 : 3500;
+                main.postDelayed(poll, section != requestedSection ? 0 : interval);
             });
         });
     }
@@ -1675,13 +1797,23 @@ public final class DeckActivity extends Activity {
             assistant.permission(results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED);
     }
 
+    void operatorDecision(String id, String decision) {
+        if (!id.matches("[0-9a-f]{32}")) return;
+        worker.execute(() -> {
+            try {
+                request("POST", "/v1/operator/" + id + "/" + decision, 204);
+                main.post(() -> { main.removeCallbacks(poll); if (active) main.post(poll); });
+            } catch (Exception failure) { main.post(() -> assistantNotice("A tarefa mudou ou a conexão falhou.")); }
+        });
+    }
+
     void assistantNotice(String message) {
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
     }
 
     private void voiceOptions() {
-        String[] labels = {"Ativar assistente", "Saudação automática", "Respeitar mídia tocando", "Legendas", "Priorizar microfone padrão do Windows"};
-        String[] keys = {"assistant-enabled", "realtime-greeting", "realtime-respect-media", "realtime-captions", "realtime-pc-mic"};
+        String[] labels = {"Ativar assistente", "Saudação automática", "Respeitar mídia tocando", "Legendas"};
+        String[] keys = {"assistant-enabled", "realtime-greeting", "realtime-respect-media", "realtime-captions"};
         boolean[] values = new boolean[keys.length];
         for (int i = 0; i < keys.length; i++) values[i] = settings.getBoolean(keys[i], i != 4);
         new AlertDialog.Builder(this).setTitle("Preferências de voz")
@@ -1692,7 +1824,8 @@ public final class DeckActivity extends Activity {
     }
 
     private void voiceDetails() {
-        String[] labels = {"Voz", "Velocidade", "Volume", "Pausa entre frases", "Tempo de inatividade", "Saída de áudio"};
+        String[] labels = {"Voz", "Velocidade", "Volume", "Pausa entre frases", "Tempo de inatividade",
+            "Avatar · cenário", "Avatar · movimentos de repouso (s)", "Avatar · atividades (s)"};
         new AlertDialog.Builder(this).setTitle("Voz e ritmo").setItems(labels, (d, i) -> {
             switch (i) {
                 case 0: voiceChoice("Voz brasileira", "local-piper-voice-output", new String[]{"pt_BR-edresson-low","pt_BR-faber-medium"}); break;
@@ -1700,14 +1833,14 @@ public final class DeckActivity extends Activity {
                 case 2: voiceNumber("Volume (%)", "realtime-volume", new int[]{30,50,65,80,100}); break;
                 case 3: voiceNumber("Pausa entre frases (centésimos de segundo)", "local-speech-pause", new int[]{0,10,20,30,40,60}); break;
                 case 4: voiceNumber("Inatividade (segundos)", "realtime-idle", new int[]{30,60,90,120,180}); break;
-                case 5:
-                    new AlertDialog.Builder(this).setTitle("Saída de áudio")
-                        .setSingleChoiceItems(new String[]{"Notebook", "Alto-falante do celular"},
-                            settings.getBoolean("local-phone-speaker", false) ? 1 : 0, (dialog, choice) -> {
-                                settings.edit().putBoolean("local-phone-speaker", choice == 1).apply();
-                                dialog.dismiss();
-                            }).show();
-                    break;
+                case 5: new AlertDialog.Builder(this).setTitle("Cenário do avatar")
+                    .setSingleChoiceItems(new String[]{"Automático","Manhã","Tarde","Noite"},
+                        settings.getInt("avatar-background",0), (dialog, item) -> {
+                            settings.edit().putInt("avatar-background",item).apply();
+                            dialog.dismiss();
+                        }).show(); break;
+                case 6: voiceNumber("Movimentos de repouso (segundos)", "avatar-idle-seconds", new int[]{30,60,90,120}); break;
+                case 7: voiceNumber("Atividades (segundos)", "avatar-scene-seconds", new int[]{60,120,180,300}); break;
                 default: break;
             }
         }).show();
@@ -1852,7 +1985,7 @@ public final class DeckActivity extends Activity {
         setIcon(view, name, tint, 17);
     }
 
-    private void inlineIcon(TextView view, String name, String label) {
+    void inlineIcon(TextView view, String name, String label) {
         Drawable icon = VisualAssets.icon(this, name);
         if (icon == null) return;
         icon.setTint(INK);
@@ -1880,7 +2013,11 @@ public final class DeckActivity extends Activity {
 
     private GradientDrawable shape(int color, int radius) {
         GradientDrawable result = new GradientDrawable();
-        result.setColor(color);
+        if (color == CARD && radius >= 12) {
+            result.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
+            result.setColors(new int[]{0xff1c1c20, CARD, 0xff0f0f11});
+            result.setStroke(dp(1), 0xff34343a);
+        } else result.setColor(color);
         result.setCornerRadius(dp(radius));
         return result;
     }
@@ -1993,8 +2130,8 @@ public final class DeckActivity extends Activity {
             super(DeckActivity.this);
             this.metric = metric;
             GradientDrawable surface = shape(CARD, 12);
-            surface.setStroke(dp(1), DeckTheme.EDGE);
             setBackground(surface);
+            setForeground(new VisualAssets.Frame(dp(12), dp(1)));
             setClipToOutline(true);
             meme = new MemeStatus(DeckActivity.this, true);
             addView(meme, new LayoutParams(-1, -1));
@@ -2054,6 +2191,7 @@ public final class DeckActivity extends Activity {
             String status = (metric == 4 && level >= 0 ? "GPU · " : "") + indicator;
             if (!status.contentEquals(state.getText())) state.setText(status);
             state.setTextColor(level == 2 ? 0xffff6a76 : level == 1 ? 0xffffbf64 : level == 0 ? 0xff8ac8a0 : SOFT);
+            meme.allowMotion(plugged || !economyEnabled());
             meme.update(METRIC_IDS[metric] + "-" + memeLevel, METRIC_EMOJIS[metric], reaction,
                 active && (level >= 0 || "fps".equals(METRIC_IDS[metric]))
                     && settings.getBoolean("memes-enabled", true));

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-ROOT = Path(os.environ.get("RIANDECK_VOICE_ROOT", r"D:\Baixados\RianDeckVoice"))
+ROOT = Path(os.environ.get("RIANDECK_VOICE_ROOT", str(Path(os.environ["LOCALAPPDATA"]) / "RianDeckVoice")))
 PROJECT = Path(__file__).resolve().parent
 TOKEN = (PROJECT / "out/agent/pairing.key").read_text().strip()
 sys.stdout.reconfigure(encoding="utf-8")
@@ -90,7 +90,7 @@ def main():
         assert stream.readline().startswith(b"HTTP/1.1 101"), "WebSocket rejeitado"
         while stream.readline() not in (b"\r\n", b""):
             pass
-        event(link, type="setup", voice="pt_BR-edresson-low", phoneSpeaker=True, speed=1.18, pause=.10, greeting="Fala, Rian! Bora conversar?")
+        event(link, type="setup", voice="pt_BR-edresson-low", phoneSpeaker=True, speed=1.18, pause=.10, greeting="Fala! Bora conversar?")
         events = frames(link, stream)
         welcome, pcm = turn(events)
         assert welcome.get("ready") and pcm > 24000, (welcome, pcm)

@@ -59,6 +59,8 @@ final class VisualAssets {
         private final boolean large, red;
         private final int face;
         private boolean pressed;
+        private int alpha = 255;
+        private Shader finish, baseFinish, bevel;
 
         Keycap(float radius, float density, boolean large, boolean red) {
             this(radius, density, large, red, DeckTheme.KEY);
@@ -74,6 +76,21 @@ final class VisualAssets {
 
         @Override public boolean isStateful() { return true; }
 
+        @Override protected void onBoundsChange(Rect bounds) {
+            if (bounds.height() <= 0) return;
+            int color = red ? DeckTheme.RED : face;
+            finish = new LinearGradient(0, bounds.top, 0, bounds.bottom,
+                new int[]{blend(color, 0xffffffff, red ? .16f : .13f),
+                    color, blend(color, 0xff000000, red ? .38f : .35f)},
+                new float[]{0,.38f,1}, Shader.TileMode.CLAMP);
+            baseFinish = new LinearGradient(0,bounds.top,0,bounds.bottom,
+                red ? 0xff491319 : 0xff121318,
+                red ? 0xff801f2c : large ? 0xff492027 : 0xff08090b, Shader.TileMode.CLAMP);
+            bevel = new LinearGradient(0,bounds.top,0,bounds.bottom,
+                red ? 0xfffc7881 : 0xff5a5b63,
+                red ? 0xff961e2b : 0xff24252a, Shader.TileMode.CLAMP);
+        }
+
         @Override protected boolean onStateChange(int[] states) {
             boolean down = false;
             for (int state : states) down |= state == android.R.attr.state_pressed;
@@ -85,99 +102,119 @@ final class VisualAssets {
 
         @Override public void draw(Canvas canvas) {
             Rect bounds = getBounds();
-            float depth = density * (large ? 5 : 3);
+            float depth = density * (large ? 6 : 3.5f);
             float edge = density * 1.2f;
+            paint.setAlpha(alpha);
             float bottom = bounds.bottom - edge;
             plate.set(bounds.left + edge, bounds.top + edge + depth,
                 bounds.right - edge, bottom);
-            paint.setColor(large || red ? DeckTheme.DARK_RED : DeckTheme.BLACK);
+            paint.setShader(baseFinish);
             canvas.drawRoundRect(plate, radius, radius, paint);
             float top = bounds.top + edge + (pressed ? depth * .55f : 0);
             plate.set(bounds.left + edge, top, bounds.right - edge,
                 bottom - (pressed ? depth * .4f : depth));
-            paint.setColor(red ? DeckTheme.RED : large ? face : DeckTheme.KEY);
+            paint.setShader(finish);
             canvas.drawRoundRect(plate, radius, radius, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(edge);
-            paint.setColor(red ? DeckTheme.DARK_RED : DeckTheme.EDGE);
+            paint.setShader(bevel);
             canvas.drawRoundRect(plate, radius, radius, paint);
+            paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
             paint.setStrokeWidth(density);
-            paint.setColor(0x20ffffff);
+            paint.setColor(pressed ? 0x11ffffff : 0x2affffff);
+            paint.setAlpha((pressed ? 17 : 42) * alpha / 255);
             canvas.drawLine(plate.left + radius, plate.top + density, plate.right - radius,
                 plate.top + density, paint);
         }
 
         @Override public void getOutline(Outline outline) { outline.setRoundRect(getBounds(), radius); }
+        @Override public void setAlpha(int alpha) { this.alpha = alpha; invalidateSelf(); }
+        @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    private static int blend(int from, int to, float amount) {
+        int red = Math.round((1-amount)*((from>>16)&255) + amount*((to>>16)&255));
+        int green = Math.round((1-amount)*((from>>8)&255) + amount*((to>>8)&255));
+        int blue = Math.round((1-amount)*(from&255) + amount*(to&255));
+        return 0xff000000 | red<<16 | green<<8 | blue;
+    }
+
+    static final class Frame extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF edge = new RectF();
+        private final float radius, thickness;
+        Frame(float radius, float thickness) {
+            this.radius = radius;
+            this.thickness = thickness;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(thickness);
+        }
+        @Override protected void onBoundsChange(Rect bounds) {
+            edge.set(bounds);
+            edge.inset(thickness/2,thickness/2);
+            if (bounds.height() > 0) paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
+                new int[]{0xff515158,0xff333339,0xff26262b,0xff40272c},
+                new float[]{0,.23f,.78f,1},Shader.TileMode.CLAMP));
+        }
+        @Override public void draw(Canvas canvas) {
+            canvas.drawRoundRect(edge,radius,radius,paint);
+        }
         @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
         @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); }
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
     static final class Cover extends Drawable {
-        private static ColorFilter grayscale() {
-            android.graphics.ColorMatrix matrix = new android.graphics.ColorMatrix();
-            matrix.setSaturation(0);
-            return new android.graphics.ColorMatrixColorFilter(matrix);
-        }
-        private static final ColorFilter MONOCHROME = grayscale();
-        private static final int VERSE_PHOTO_ALPHA = 230; // Approximately 90% of 255
+        private static final float[] STARS = {.16f,.21f,.30f,.37f,.48f,.19f,.58f,.69f,
+            .66f,.23f,.74f,.49f,.83f,.22f,.91f,.71f,.95f,.31f};
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final RectF corners = new RectF();
         private final Bitmap bitmap;
         private final int base;
         private final float radius;
-        private final boolean subdued;
-        private Shader photo, tint;
+        private final boolean fitHeight, stars;
+        private Shader photo;
 
-        Cover(Bitmap bitmap, int base, float radius, boolean subdued) {
+        Cover(Bitmap bitmap, int base, float radius, boolean fitHeight) {
+            this(bitmap, base, radius, fitHeight, false);
+        }
+
+        Cover(Bitmap bitmap, int base, float radius, boolean fitHeight, boolean stars) {
             this.bitmap = bitmap;
             this.base = base;
             this.radius = radius;
-            this.subdued = subdued;
+            this.fitHeight = fitHeight;
+            this.stars = stars;
         }
 
         @Override protected void onBoundsChange(Rect bounds) {
             corners.set(bounds);
             if (bitmap != null) {
                 BitmapShader shader = new BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-                float scale = subdued ? corners.height() / bitmap.getHeight()
-                    : Math.max(corners.width() / bitmap.getWidth(), corners.height() / bitmap.getHeight());
+                float scale = Math.max(corners.width() / bitmap.getWidth(), corners.height() / bitmap.getHeight());
                 Matrix transform = new Matrix();
                 transform.setScale(scale, scale);
-                transform.postTranslate(subdued ? corners.right - bitmap.getWidth() * scale
+                transform.postTranslate(fitHeight ? corners.right - bitmap.getWidth() * scale
                         : corners.centerX() - bitmap.getWidth() * scale / 2,
                     corners.centerY() - bitmap.getHeight() * scale / 2);
                 shader.setLocalMatrix(transform);
                 photo = shader;
             }
-            if (!subdued && bounds.width() > 0) {
-                tint = new LinearGradient(corners.left, corners.bottom, corners.right, corners.top,
-                    new int[]{0xfe111111, 0xd2111111, 0x90111111}, null, Shader.TileMode.CLAMP);
-            }
         }
 
         @Override public void draw(Canvas canvas) {
             paint.setColor(base);
-            if (subdued) {
-                canvas.drawRoundRect(corners, radius, radius, paint);
-                if (photo != null) {
-                    paint.setShader(photo);
-                    paint.setColorFilter(MONOCHROME);
-                    paint.setAlpha(VERSE_PHOTO_ALPHA);
-                    canvas.drawRoundRect(corners, radius, radius, paint);
-                    paint.setColorFilter(null);
-                    paint.setAlpha(255);
-                }
-            } else {
-                paint.setShader(photo);
-                canvas.drawRoundRect(corners, radius, radius, paint);
-            }
-            if (photo != null && tint != null) {
-                paint.setShader(tint);
-                canvas.drawRoundRect(corners, radius, radius, paint);
-            }
+            paint.setShader(photo);
+            canvas.drawRoundRect(corners, radius, radius, paint);
             paint.setShader(null);
+            if (stars) {
+                paint.setColor(0xffdee8ff);
+                for (int i = 0; i < STARS.length; i += 2)
+                    canvas.drawCircle(corners.left + corners.width()*STARS[i],
+                        corners.top + corners.height()*STARS[i+1], radius*(i%4==0?.11f:.065f), paint);
+            }
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1);
             paint.setColor(DeckTheme.EDGE);

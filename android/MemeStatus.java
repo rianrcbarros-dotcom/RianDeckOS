@@ -33,6 +33,7 @@ final class MemeStatus extends FrameLayout {
     private AnimatedImageDrawable animation;
     private String current = "";
     private boolean enabled;
+    private boolean motionAllowed = true;
 
     private final boolean backdrop;
 
@@ -100,13 +101,18 @@ final class MemeStatus extends FrameLayout {
         image.setVisibility(enabled && animation != null ? VISIBLE : INVISIBLE);
         setContentDescription(enabled && animation != null ? message + " · GIF animado"
             : backdrop ? null : message + " · emoji");
-        if (enabled && animation != null && isShown()) {
+        if (enabled && motionAllowed && animation != null && isShown()) {
             if (!animation.isRunning()) animation.start();
         }
         else pause();
     }
 
     void pause() { if (animation != null) animation.stop(); }
+
+    void allowMotion(boolean allowed) {
+        motionAllowed = allowed;
+        if (!allowed) pause();
+    }
 
     @Override protected void onDetachedFromWindow() {
         pause();
@@ -115,7 +121,7 @@ final class MemeStatus extends FrameLayout {
 
     @Override protected void onWindowVisibilityChanged(int visibility) {
         super.onWindowVisibilityChanged(visibility);
-        if (visibility == VISIBLE && enabled && animation != null) animation.start();
+        if (visibility == VISIBLE && motionAllowed && enabled && animation != null) animation.start();
         else pause();
     }
 }

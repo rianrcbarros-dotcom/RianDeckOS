@@ -43,13 +43,16 @@ final class VerseCard extends LinearLayout {
         super(context);
         setOrientation(VERTICAL);
         setPadding(dp(12), dp(8), dp(12), dp(7));
+        setForeground(new VisualAssets.Frame(dp(13),dp(1)));
         setBackground(new VisualAssets.Cover(VisualAssets.bitmap(context, "photos/jesus.jpg"),
             DeckTheme.PANEL, dp(13), true));
 
         title = label("Versículo do dia", 16, 0xfff6f5f4);
+        title.setShadowLayer(dp(3), 0, dp(1), 0xff000000);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         addView(title);
         passage = label("Carregando versículo…", 14, 0xfff6f5f4);
+        passage.setShadowLayer(dp(3), 0, dp(1), 0xff000000);
         passage.setPadding(0, dp(4), dp(5), dp(4));
         passage.setFocusable(true);
         passage.setOnClickListener(view -> showPassage());
@@ -66,6 +69,7 @@ final class VerseCard extends LinearLayout {
         }
 
         reference = label("Biblia.com ↗", 12, 0xfff38b94);
+        reference.setShadowLayer(dp(3), 0, dp(1), 0xff000000);
         reference.setGravity(Gravity.CENTER_VERTICAL);
         reference.setFocusable(true);
         reference.setOnClickListener(view -> {
@@ -90,6 +94,7 @@ final class VerseCard extends LinearLayout {
 
     void artwork(Bitmap image) {
         if (image == null) return;
+        setBackground(new VisualAssets.Cover(image, DeckTheme.PANEL, dp(13), true));
         title.setContentDescription("Versículo do dia, abrir arte do Biblia.com");
         title.setOnClickListener(view -> {
             ImageView picture = new ImageView(getContext());
