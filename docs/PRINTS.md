@@ -1,6 +1,6 @@
 # Prints do RianDeckOS
 
-Capturas do APK em paisagem no Moto G20. As leituras de monitoramento representam o instante da captura. Cidade, saudação personalizada e registro local de automação foram ocultados.
+Capturas do RianDeckOS 5.4 em paisagem no Moto G20. As leituras de monitoramento, notícias e cotações representam o instante da captura. Dados pessoais foram ocultados.
 
 ## Controle
 
@@ -10,9 +10,13 @@ Capturas do APK em paisagem no Moto G20. As leituras de monitoramento representa
 
 ![Dados do Windows e GIFs ao fundo](prints/monitoramento.png)
 
-## Assistente
+## Trends
 
-![Assistente de voz com botão circular](prints/assistente.png)
+![Quatro notícias com fotos editoriais e quatro gráficos com cenários pixel art](prints/trends.png)
+
+## Assistente Pião
+
+![Assistente em pixel art com paisagem e controles de voz](prints/assistente.png)
 
 ## Automações
 

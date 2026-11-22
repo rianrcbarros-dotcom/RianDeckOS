@@ -10,12 +10,14 @@ flowchart LR
   Agent -->|"Pergunta e contexto curto · loopback 11434"| Ollama["Ollama + Qwen3"]
   Agent -->|"Síntese pt-BR"| Piper["Piper"]
   Agent -->|"Análise com confirmação"| Codex["Codex CLI"]
+  Agent -->|"Notícias, miniaturas e cotações"| Trends["Feeds editoriais, Yahoo Finance e CoinGecko"]
+  Agent -->|"OAuth somente leitura"| Google["Gmail, Agenda e Tasks"]
   Editor["Studio no navegador"] <-->|"Credencial de editor"| Agent
 ~~~
 
 | Bloco | Implementação e comportamento |
 | --- | --- |
-| Android | `DeckActivity.java` monta as cinco abas. `VoiceDeck.java` controla a captura manual e `DeckVoiceSocket.java` transmite PCM. `MemeStatus.java` controla GIFs e estados. |
+| Android | `DeckActivity.java` monta as seis abas. `VoiceDeck.java` controla a captura manual, e `DeckVoiceSocket.java` atende aos fluxos de voz e Trends. `MemeStatus.java` controla GIFs e estados. |
 | USB e início | `Connect.ps1` instala e abre o painel. O agente verifica e recupera a porta 48627 no ADB. `DeckAutostart` registra o executável no HKCU ao ativar a opção de login. |
 | Agente | `Program.cs` limita o serviço a 127.0.0.1. As rotas do Deck validam a chave pareada. O Studio usa credencial própria. O catálogo do agente define quais ações podem ser executadas. |
 | Studio e automações | `DeckStudio.cs` e `Editor.html` mantêm páginas, perfis, favoritos de macros e histórico. O perfil automático pode mudar conforme o processo em primeiro plano. |
@@ -24,6 +26,8 @@ flowchart LR
 | Voz | Após o segundo toque, `LocalVoiceSession` recorta e encaminha áudio para Whisper. `VoiceIntent.cs` classifica os atalhos de voz sem usar o modelo de conversa. Qwen responde perguntas gerais. Piper fala via saída padrão do Windows ou mídia do Android, conforme a preferência. |
 | Codex | O CLI usa o login oficial. A análise precisa de caminho de repositório autorizado, exige confirmação e roda em sandbox somente leitura. |
 | Clima e versículo | Open-Meteo consulta a cidade escolhida no Android. O agente consulta a fonte de versículos quando disponível. |
+| Trends | `TrendsService.cs` mantém o cache no Windows. `TrendsScreen.java` recebe as notícias e cotações via USB e desenha os gráficos em Canvas. |
+| Google | `GoogleRead.cs` conecta cada conta via OAuth com escopos de leitura e protege a autorização persistente com a conta do Windows. |
 
 ## Contratos do agente
 
@@ -37,6 +41,8 @@ flowchart LR
 | `GET /v1/startup` e `POST /v1/startup?enabled=true` | Estado e ajuste da inicialização |
 | `GET /editor` e `/studio/config` | Studio e configuração de perfis |
 | `WS /v1/assistant/realtime` | Voz local. O caminho histórico usa realtime, o processamento é local. |
+| `WS /v1/trends/stream` | Snapshots das notícias e dos indicadores enquanto a aba está aberta |
+| `GET /v1/trends/image/{id}` e `POST /v1/trends/news/{id}` | Miniatura editorial e abertura da matéria no navegador padrão do Windows |
 
 O WebSocket recebe a configuração, depois `start_capture`, PCM de 24 kHz mono e `submit_capture`. A alternativa `pc_input` seleciona a entrada padrão Windows apenas no turno. A resposta publica legenda e estado. Se o Android for escolhido como saída, recebe PCM binário. A saída padrão é a do Windows.
 

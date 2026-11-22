@@ -1,6 +1,6 @@
 # Interface minimalista do Assistente
 
-A aba usa um desenho 2D original, montado em camadas no Canvas nativo Android. O fundo é preto e o painel preserva o cabeçalho comum. A conversa escrita não ocupa espaço na tela principal.
+A aba usa um avatar em pixel art desenhado por camadas no Canvas nativo Android. A paisagem escurece na área das legendas, abaixo do cabeçalho comum.
 
 - **Falar** abre a sessão com a entrada padrão do Windows. Durante a escuta, toque novamente para enviar.
 - **Interromper** descarta a captura ou para o processamento e a resposta em andamento. Se a sessão de voz estiver ociosa e existir uma tarefa ativa, solicita o cancelamento dessa tarefa.
@@ -12,7 +12,7 @@ A aba usa um desenho 2D original, montado em camadas no Canvas nativo Android. O
 | android/VoiceDeck.java | Interface dividida, três botões, estado real, forma de onda e ligação com a persona. |
 | agent/RealtimeDeck.cs | Envelope de volume da entrada e da saída Windows e cancelamento do turno existente. |
 
-O desenho atualiza a até 20 quadros por segundo e para quando a aba está oculta ou o app entra em segundo plano. A boca reage ao envelope RMS do PCM usado na reprodução Windows, com suavização. Ela não resolve fonemas ou visemas e pode apresentar atraso pelo dispositivo de áudio, pelo transporte e pela renderização. A tarefa executada e o estado de voz continuam vindo do agente.
+O desenho reduz a cadência em repouso com o perfil de economia ativo e pausa quando a aba está oculta ou o app entra em segundo plano. A boca acompanha aproximadamente o volume da reprodução do Windows. A tarefa executada e o estado de voz vêm do agente.
 
 ## Atividades do Assistente Pião
 
@@ -22,7 +22,7 @@ O avatar usa um desenho articulado em um bitmap reutilizado de 216 × 180 pixels
 
 A boca usa a amplitude da saída de áudio enviada pelo Windows. A correspondência com fonemas é aproximada. Os movimentos são desenhados em tempo real com o mesmo rosto e a mesma base de camiseta azul.
 
-A cena é interrompida ao escutar, processar, responder ou executar uma tarefa. A animação permanece em Canvas e pausa quando a aba está oculta. A legenda Entendi mostra a última transcrição e é limpa antes de gravar outra.
+A cena é interrompida ao escutar, processar, responder ou executar uma tarefa. A legenda **Entendi** mostra a última transcrição, e **Pião** mostra a resposta. Toque na resposta para abrir o texto completo.
 
 ### Validação do avatar em pixel art
 
