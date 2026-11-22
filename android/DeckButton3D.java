@@ -78,11 +78,14 @@ final class DeckButton3D extends TextView {
         switch (motion.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                animate().translationY(2).translationZ(-getElevation()).setDuration(105).start();
+                animate().translationY(getResources().getDisplayMetrics().density)
+                    .scaleX(.975f).scaleY(.975f).translationZ(-getElevation()).setDuration(68)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                animate().translationY(0).translationZ(0).setDuration(125).start();
+                animate().translationY(0).scaleX(1).scaleY(1).translationZ(0).setDuration(175)
+                    .setInterpolator(new android.view.animation.OvershootInterpolator(.65f)).start();
                 break;
         }
         return super.onTouchEvent(motion);

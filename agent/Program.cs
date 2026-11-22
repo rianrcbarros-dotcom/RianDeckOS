@@ -38,6 +38,10 @@ if (!string.IsNullOrWhiteSpace(serial))
 }
 var app = builder.Build();
 app.UseWebSockets();
+using var trends = new TrendsService(builder.Configuration);
+app.MapGet("/v1/trends/stream", trends.Stream);
+app.MapPost("/v1/trends/news/{id}", (string id) => trends.Open(id) ? Results.NoContent() : Results.NotFound());
+app.MapGet("/v1/trends/image/{id}", trends.Thumbnail);
 var shortcuts = new DesktopShortcuts(builder.Configuration);
 app.Use(async (context, next) =>
 {

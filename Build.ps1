@@ -55,6 +55,12 @@ foreach ($group in 'icons','photos') {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $drawables $resource)
     }
 }
+foreach ($group in 'backgrounds','icons') {
+    Get-ChildItem -LiteralPath (Join-Path $assetRoot "trends/$group") -File -Filter '*.png' | ForEach-Object {
+        $resource = "trends_${group}_" + $_.Name.ToLowerInvariant().Replace('-','_')
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $drawables $resource)
+    }
+}
 Copy-Item -LiteralPath (Join-Path $assetRoot 'fonts\Manrope.ttf') -Destination (Join-Path $fonts 'manrope.ttf')
 Copy-Item -LiteralPath (Join-Path $assetRoot 'CREDITOS.txt') -Destination (Join-Path $raw 'visual_credits.txt')
 Copy-Item -LiteralPath (Join-Path $assetRoot 'fonts\OFL-Manrope.txt') -Destination (Join-Path $raw 'manrope_license.txt')

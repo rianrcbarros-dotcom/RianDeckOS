@@ -53,8 +53,9 @@ public final class DeckActivity extends Activity {
     private static final int BG = DeckTheme.BLACK, CARD = DeckTheme.PANEL, INK = DeckTheme.INK, RED = DeckTheme.RED;
     private static final int SOFT = DeckTheme.MUTED, MINT = 0xff73e5c6, VIOLET = 0xffa998ff;
     private static final int PINK = 0xffff8b9b, GOLD = 0xffffcb80;
-    private static final String[] TITLES = {"Controle", "Monitoramento", "Assistente", "Automações", "Configurações"};
-    private static final String[] ICONS = {"grid", "chart", "voice", "bolt", "settings"};
+    private static final int TRENDS=2, ASSISTANT=3, AUTOMATIONS=4, SETTINGS=5;
+    private static final String[] TITLES = {"Controle", "Monitoramento", "Trends", "Assistente", "Automações", "Configurações"};
+    private static final String[] ICONS = {"grid", "chart", "trending-up", "voice", "bolt", "settings"};
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService telemetry = Executors.newSingleThreadExecutor();
@@ -137,6 +138,7 @@ public final class DeckActivity extends Activity {
     private LinearLayout body, nav;
     private ScrollView scroll;
     private SharedPreferences settings;
+    private TrendsScreen trends;
     private int section;
     private VoiceDeck assistant;
     private boolean immersive, active, connected, microphoneBusy, pollRunning;
@@ -252,7 +254,7 @@ public final class DeckActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (immersive || armed()) {
-            if (editingButtons) show(3, true);
+            if (editingButtons) show(AUTOMATIONS, true);
             else if (section != 0) show(0, true);
             return;
         }
@@ -266,6 +268,11 @@ public final class DeckActivity extends Activity {
             if (economyEnabled()) applyPowerPolicy();
             commandSwipe = false;
             pagingDrag = false;
+            if (commandGrid != null && section == 0) {
+                commandGrid.animate().cancel();
+                commandGrid.setTranslationX(0);
+                commandGrid.setAlpha(1);
+            }
             if (section == 0 && !editingButtons && pageCount > 1) {
                 swipeX = event.getRawX();
                 swipeY = event.getRawY();
@@ -275,7 +282,10 @@ public final class DeckActivity extends Activity {
             action == android.view.MotionEvent.ACTION_POINTER_DOWN) {
             commandSwipe = false;
             if (pagingDrag) {
-                if (action == android.view.MotionEvent.ACTION_CANCEL) pagingDrag = false;
+                if (action == android.view.MotionEvent.ACTION_CANCEL) {
+                    pagingDrag = false;
+                    settlePage();
+                }
                 return true;
             }
         } else if (commandSwipe || pagingDrag) {
@@ -283,7 +293,7 @@ public final class DeckActivity extends Activity {
             float y = event.getRawY() - swipeY;
             boolean horizontal = Math.abs(x) > Math.abs(y) * 1.35f;
             if (commandSwipe && action == android.view.MotionEvent.ACTION_MOVE && !pagingDrag &&
-                Math.abs(x) > dp(22) && horizontal) {
+                Math.abs(x) > android.view.ViewConfiguration.get(this).getScaledTouchSlop() && horizontal) {
                 android.view.MotionEvent cancel = android.view.MotionEvent.obtain(event);
                 cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);
                 super.dispatchTouchEvent(cancel);
@@ -294,16 +304,31 @@ public final class DeckActivity extends Activity {
             }
             if (action == android.view.MotionEvent.ACTION_UP) {
                 boolean consumed = pagingDrag;
-                boolean advance = commandSwipe && pagingDrag && horizontal && Math.abs(x) >= dp(48)
+                boolean quick = event.getEventTime() - event.getDownTime() < 225 && Math.abs(x) >= dp(24);
+                boolean advance = commandSwipe && pagingDrag && horizontal && (Math.abs(x) >= dp(48) || quick)
                     && section == 0 && !editingButtons;
                 commandSwipe = pagingDrag = false;
-                if (advance) movePage(x < 0 ? 1 : -1, pageCount);
+                int direction = x < 0 ? 1 : -1;
+                if (advance && shortcutPage + direction >= 0 && shortcutPage + direction < pageCount)
+                    movePage(direction, pageCount);
+                else if (consumed) settlePage();
                 if (consumed) return true;
             } else if (pagingDrag) {
+                if (action == android.view.MotionEvent.ACTION_MOVE && commandGrid != null) {
+                    boolean edge = x > 0 ? shortcutPage == 0 : shortcutPage == pageCount - 1;
+                    float travel = x * (edge ? .18f : .66f);
+                    float limit = commandGrid.getWidth() * .34f;
+                    commandGrid.setTranslationX(Math.max(-limit, Math.min(limit, travel)));
+                }
                 return true;
             }
         }
         return super.dispatchTouchEvent(event);
+    }
+
+    private void settlePage() {
+        if (commandGrid != null) commandGrid.animate().translationX(0).setDuration(190)
+            .setInterpolator(new android.view.animation.DecelerateInterpolator(1.7f)).start();
     }
 
     private boolean touched(View view) {
@@ -317,6 +342,7 @@ public final class DeckActivity extends Activity {
         super.onStart();
         registerReceiver(batteryUpdates, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
         active = true;
+        if (section == TRENDS && trends != null) trends.start();
         lastTouch = android.os.SystemClock.elapsedRealtime();
         android.os.PowerManager power = getSystemService(android.os.PowerManager.class);
         thermal = power.getCurrentThermalStatus();
@@ -340,6 +366,7 @@ public final class DeckActivity extends Activity {
     @Override protected void onStop() {
         unregisterReceiver(batteryUpdates);
         assistant.suspend();
+        if (trends != null) trends.stop();
         active = false;
         for (Graph graph : graphs) if (graph != null) graph.meme.pause();
         getSystemService(android.os.PowerManager.class).removeThermalStatusListener(thermalListener);
@@ -373,7 +400,7 @@ public final class DeckActivity extends Activity {
         LinearLayout brand = new LinearLayout(this);
         brand.setGravity(Gravity.CENTER_VERTICAL);
         brand.addView(name);
-        TextView version = text("v5.3", 10, SOFT);
+        TextView version = text("v5.4", 10, SOFT);
         version.setPadding(dp(6), dp(3), dp(6), dp(3));
         version.setBackground(shape(CARD, 6));
         LinearLayout.LayoutParams badge = new LinearLayout.LayoutParams(-2, -2);
@@ -419,7 +446,8 @@ public final class DeckActivity extends Activity {
     }
 
     private void navigate(int index, boolean animate) {
-        if (section == 2 && index != 2) assistant.hide();
+        if (section == ASSISTANT && index != ASSISTANT) assistant.hide();
+        if (section == TRENDS && index != TRENDS && trends != null) trends.stop();
         section = index;
         main.removeCallbacks(poll);
         if (active) main.post(poll);
@@ -456,8 +484,12 @@ public final class DeckActivity extends Activity {
         if (editingButtons) editButtons();
         else if (section == 0) controls();
         else if (section == 1) monitoring();
-        else if (section == 2) assistant.mount(body, connected);
-        else if (section == 3) automations();
+        else if (section == TRENDS) {
+            if (trends == null) trends = new TrendsScreen(this, settings);
+            trends.mount(body);
+            if (active) trends.start();
+        } else if (section == ASSISTANT) assistant.mount(body, connected);
+        else if (section == AUTOMATIONS) automations();
         else preferences();
         scroll.setVerticalScrollBarEnabled(section != 0 || !landscape());
         scroll.scrollTo(0, 0);
@@ -984,7 +1016,7 @@ public final class DeckActivity extends Activity {
                         if (isDestroyed()) return;
                         Toast.makeText(this, saved ? "PIN configurado" : "Não foi possível proteger o PIN",
                             Toast.LENGTH_SHORT).show();
-                        if (section == 4) display(false);
+                        if (section == SETTINGS) display(false);
                     });
                 });
             }).create();
@@ -1076,7 +1108,14 @@ public final class DeckActivity extends Activity {
         int target = shortcutPage + direction;
         if (target < 0 || target >= pages) return;
         shortcutPage = target;
-        display(true);
+        float dragged = commandGrid == null ? 0 : Math.abs(commandGrid.getTranslationX());
+        display(false);
+        if (commandGrid != null) {
+            commandGrid.setTranslationX(Math.signum(direction) * Math.min(dp(125), dp(42) + dragged * .5f));
+            commandGrid.setAlpha(.82f);
+            commandGrid.animate().translationX(0).alpha(1).setDuration(230)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f)).start();
+        }
     }
 
     private void addPageControl(LinearLayout row, TextView view, int width) {
@@ -1141,7 +1180,7 @@ public final class DeckActivity extends Activity {
     }
 
     private void showButtonEditor() {
-        section = 4;
+        section = SETTINGS;
         editingButtons = true;
         display(true);
     }
@@ -1149,7 +1188,7 @@ public final class DeckActivity extends Activity {
     private void editButtons() {
         heading(body, "Botões visíveis");
         addWeighted(row(body), tile("settings", "Voltar às configurações", MINT, CARD,
-            () -> show(3, true)), 43);
+            () -> show(AUTOMATIONS, true)), 43);
         boolean wide = landscape();
         int columns = wide ? 3 : 1;
         LinearLayout line = null;
@@ -1190,10 +1229,13 @@ public final class DeckActivity extends Activity {
         String day = java.time.LocalDate.now().toString();
         long text = verseDelay(verseFetchedAt, verseDate, day, now);
         long art = verseDelay(artworkFetchedAt, artworkDate, day, now);
-        main.postDelayed(refreshBible, Math.min(text > 0 ? text : VERSE_RETRY, art > 0 ? art : VERSE_RETRY));
+        long nextPhoto = VerseCard.PHOTO_INTERVAL - Math.floorMod(now, VerseCard.PHOTO_INTERVAL);
+        main.postDelayed(refreshBible, Math.min(nextPhoto,
+            Math.min(text > 0 ? text : VERSE_RETRY, art > 0 ? art : VERSE_RETRY)));
     }
 
     private void loadVerse() {
+        if (verse != null) verse.refreshPhoto();
         if (verseLoading || isDestroyed()) return;
         String today = java.time.LocalDate.now().toString();
         String edition = settings.getString("verse-edition", "ara");
@@ -1708,11 +1750,11 @@ public final class DeckActivity extends Activity {
         boolean metricsNeeded = requestedSection == 0 || requestedSection == 1;
         final boolean economy = economyEnabled();
         final long started = android.os.SystemClock.elapsedRealtime();
-        boolean deckNeeded = requestedSection == 3 || requestedSection == 0 &&
+        boolean deckNeeded = requestedSection == AUTOMATIONS || requestedSection == 0 &&
             (!economy || remote == null || started - deckCheckedAt >= 12_000);
         telemetry.execute(() -> {
             JSONObject sample = readJson(metricsNeeded ? "/v1/status" : "/v1/ping");
-            JSONObject task = sample != null && requestedSection == 2 ? readJson("/v1/operator") : null;
+            JSONObject task = sample != null && requestedSection == ASSISTANT ? readJson("/v1/operator") : null;
             JSONObject configuration = sample == null || !deckNeeded ? null : readJson("/v1/deck");
             JSONObject playing = sample == null || requestedSection != 0 ? null : readJson("/v1/media");
             main.post(() -> {
@@ -1723,7 +1765,7 @@ public final class DeckActivity extends Activity {
                 if (!connected || !wasConnected) deckCheckedAt = 0;
                 if (configuration != null) deckCheckedAt = started;
                 refreshHeader();
-                if (section == 2) { assistant.connection(connected); if (requestedSection == 2) assistant.task(task); }
+                if (section == ASSISTANT) { assistant.connection(connected); if (requestedSection == ASSISTANT) assistant.task(task); }
                 if (metricsNeeded || !connected)
                     micMuted = sample == null || sample.isNull("microphone") ? null : sample.optBoolean("microphone");
                 for (DeckButton3D key : remoteKeys) key.availability(connected);
@@ -1758,6 +1800,16 @@ public final class DeckActivity extends Activity {
         });
     }
 
+    void openTrendArticle(String id) {
+        if (!id.matches("[0-9]+")) return;
+        worker.execute(() -> {
+            try { request("POST", "/v1/trends/news/" + id, 204); }
+            catch (Exception error) {
+                main.post(() -> assistantNotice("Não foi possível abrir a notícia no Windows."));
+            }
+        });
+    }
+
     private JSONObject readJson(String route) {
         try { return new JSONObject(request("GET", route, 200)); }
         catch (Exception error) { return null; }
@@ -1779,7 +1831,7 @@ public final class DeckActivity extends Activity {
             settings.edit().putString("deck-cache", data.toString()).apply();
         }
         remote = current;
-        if (rebuild && (section == 0 || section == 3)) display(false);
+        if (rebuild && (section == 0 || section == AUTOMATIONS)) display(false);
     }
 
     private void refreshMicrophone() {

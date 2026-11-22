@@ -24,6 +24,9 @@ import java.util.regex.Pattern;
 
 final class VerseCard extends LinearLayout {
     static final String SOURCE = "https://biblia.com/bible/bb-sbb-ra/verseoftheday";
+    static final long PHOTO_INTERVAL = 6 * 60 * 60 * 1000L;
+    private static final String[] PHOTOS = {"chosen.jpg", "jesus.jpg", "shepherd.jpg"};
+    private int photoIndex = -1;
     private static final Pattern REFERENCE = Pattern.compile("data-citation=\"([^\"]+)\"");
     private static final Pattern PASSAGE = Pattern.compile("data-passage-text=\"([^\"]+)\"");
     private final TextView title, passage, reference;
@@ -44,8 +47,7 @@ final class VerseCard extends LinearLayout {
         setOrientation(VERTICAL);
         setPadding(dp(12), dp(8), dp(12), dp(7));
         setForeground(new VisualAssets.Frame(dp(13),dp(1)));
-        setBackground(new VisualAssets.Cover(VisualAssets.bitmap(context, "photos/jesus.jpg"),
-            DeckTheme.PANEL, dp(13), true));
+        refreshPhoto();
 
         title = label("Versículo do dia", 16, 0xfff6f5f4);
         title.setShadowLayer(dp(3), 0, dp(1), 0xff000000);
@@ -94,7 +96,6 @@ final class VerseCard extends LinearLayout {
 
     void artwork(Bitmap image) {
         if (image == null) return;
-        setBackground(new VisualAssets.Cover(image, DeckTheme.PANEL, dp(13), true));
         title.setContentDescription("Versículo do dia, abrir arte do Biblia.com");
         title.setOnClickListener(view -> {
             ImageView picture = new ImageView(getContext());
@@ -104,6 +105,15 @@ final class VerseCard extends LinearLayout {
             new AlertDialog.Builder(getContext()).setTitle("Arte do dia · Biblia.com")
                 .setView(picture).setPositiveButton("Fechar", null).show();
         });
+    }
+
+    void refreshPhoto() {
+        int index = (int) Math.floorMod(System.currentTimeMillis() / PHOTO_INTERVAL, (long) PHOTOS.length);
+        if (index == photoIndex) return;
+        photoIndex = index;
+        Bitmap photo = VisualAssets.bitmap(getContext(), "photos/" + PHOTOS[index]);
+        if (photo == null) photo = VisualAssets.bitmap(getContext(), "photos/jesus.jpg");
+        setBackground(new VisualAssets.Cover(photo, DeckTheme.PANEL, dp(13), true));
     }
 
     void update(Verse verse, boolean loading, boolean stale) {

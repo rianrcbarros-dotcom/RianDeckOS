@@ -15,6 +15,10 @@ final class DeckVoiceSocket implements Closeable {
     private OutputStream output;
 
     void open() throws Exception {
+        open("/v1/assistant/realtime");
+    }
+
+    void open(String path) throws Exception {
         socket.connect(new InetSocketAddress("127.0.0.1", 48627), 2500);
         socket.setTcpNoDelay(true);
         socket.setSoTimeout(18000);
@@ -23,7 +27,7 @@ final class DeckVoiceSocket implements Closeable {
         byte[] nonce = new byte[16];
         RANDOM.nextBytes(nonce);
         String key = Base64.encodeToString(nonce, Base64.NO_WRAP);
-        String request = "GET /v1/assistant/realtime HTTP/1.1\r\nHost: 127.0.0.1:48627\r\nConnection: Upgrade\r\n"
+        String request = "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1:48627\r\nConnection: Upgrade\r\n"
             + "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key
             + "\r\nAuthorization: Bearer " + Pairing.TOKEN + "\r\n\r\n";
         output.write(request.getBytes(StandardCharsets.US_ASCII));
